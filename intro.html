@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AirTranslate - Mac 실시간 기록 번역 앱</title>
+  <meta name="description" content="AirTranslate는 Mac에서 재생되는 시스템 오디오를 실시간으로 기록하고 번역하는 macOS 앱입니다.">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --ink: #f7f9fc;
+      --muted: #9ca8b8;
+      --line: #2c3542;
+      --panel: #151b24;
+      --panel-strong: #1c2531;
+      --blue: #1686ff;
+      --green: #44d071;
+      --yellow: #ffd15c;
+      --red: #ff5b6d;
+      --white: #ffffff;
+      --black: #05070a;
+      --shadow: rgba(0, 0, 0, 0.34);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(255,255,255,0.032) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.032) 1px, transparent 1px),
+        radial-gradient(circle at 50% 0%, #1b2b3f 0%, var(--bg) 42%);
+      background-size: 22px 22px, 22px 22px, 100% 100%;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .page {
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 18px 22px;
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+    }
+
+    .brand img {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      image-rendering: pixelated;
+      background: var(--white);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .nav-links a:hover {
+      color: var(--ink);
+    }
+
+    .hero {
+      position: relative;
+      min-height: calc(100vh - 68px);
+      display: grid;
+      place-items: center;
+      padding: 70px 22px 84px;
+      isolation: isolate;
+    }
+
+    .hero::before,
+    .hero::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    .hero::before {
+      inset: 8% auto auto 50%;
+      width: min(680px, 84vw);
+      aspect-ratio: 1;
+      transform: translateX(-50%);
+      background:
+        linear-gradient(90deg, transparent 0 11px, rgba(22,134,255,0.2) 11px 14px, transparent 14px 34px),
+        linear-gradient(transparent 0 11px, rgba(68,208,113,0.16) 11px 14px, transparent 14px 34px);
+      background-size: 34px 34px;
+      mask-image: radial-gradient(circle, black 0%, transparent 68%);
+      opacity: 0.75;
+    }
+
+    .hero::after {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 180px;
+      background: linear-gradient(to bottom, transparent, var(--bg));
+    }
+
+    .hero-inner {
+      max-width: 920px;
+      width: 100%;
+      text-align: center;
+    }
+
+    .app-icon-stage {
+      position: relative;
+      width: min(180px, 38vw);
+      height: min(180px, 38vw);
+      margin: 0 auto 34px;
+      display: grid;
+      place-items: center;
+    }
+
+    .app-icon-stage::before {
+      content: "";
+      position: absolute;
+      inset: -14px;
+      background:
+        linear-gradient(90deg, var(--blue) 0 10px, transparent 10px 20px),
+        linear-gradient(var(--green) 0 10px, transparent 10px 20px);
+      background-size: 20px 20px;
+      opacity: 0.18;
+      transform: rotate(3deg);
+    }
+
+    .app-icon {
+      width: 100%;
+      height: 100%;
+      display: block;
+      position: relative;
+      border-radius: 36px;
+      image-rendering: pixelated;
+      background: var(--white);
+      box-shadow:
+        0 0 0 4px var(--white),
+        0 0 0 9px var(--black),
+        18px 18px 0 var(--blue),
+        -12px 22px 0 var(--green),
+        0 34px 56px var(--shadow);
+    }
+
+    h1 {
+      margin: 0 auto;
+      max-width: 880px;
+      font-size: clamp(48px, 8vw, 96px);
+      line-height: 0.94;
+      letter-spacing: 0;
+      font-weight: 900;
+    }
+
+    .hero-copy {
+      margin: 24px auto 0;
+      max-width: 720px;
+      color: #c7d0dd;
+      font-size: clamp(18px, 2.2vw, 24px);
+      line-height: 1.55;
+      font-weight: 650;
+    }
+
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 52px;
+      padding: 0 22px;
+      border: 3px solid var(--black);
+      background: var(--blue);
+      color: var(--white);
+      font-weight: 900;
+      box-shadow: 6px 6px 0 var(--black);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .button:hover {
+      transform: translate(2px, 2px);
+      box-shadow: 4px 4px 0 var(--black);
+    }
+
+    .button.secondary {
+      background: var(--white);
+      color: var(--black);
+    }
+
+    .section {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 92px 22px;
+    }
+
+    .section-heading {
+      max-width: 760px;
+      margin-bottom: 34px;
+    }
+
+    .section-heading h2 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: 1;
+      font-weight: 900;
+    }
+
+    .section-heading p {
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 19px;
+      line-height: 1.65;
+      font-weight: 650;
+    }
+
+    .workflow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .step,
+    .feature,
+    .panel {
+      background: var(--panel);
+      border: 3px solid var(--line);
+      box-shadow: 8px 8px 0 var(--black);
+    }
+
+    .step {
+      padding: 22px;
+      min-height: 238px;
+    }
+
+    .pixel-icon {
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 22px;
+      background: var(--white);
+      color: var(--black);
+      border: 3px solid var(--black);
+      box-shadow: 5px 5px 0 var(--blue);
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .pixel-icon svg {
+      width: 28px;
+      height: 28px;
+      fill: currentColor;
+    }
+
+    .step h3,
+    .feature h3,
+    .panel h3 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      font-weight: 900;
+    }
+
+    .step p,
+    .feature p,
+    .panel p {
+      margin: 12px 0 0;
+      color: #b7c2d1;
+      line-height: 1.6;
+      font-weight: 620;
+    }
+
+    .showcase {
+      display: grid;
+      grid-template-columns: 0.95fr 1.05fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .panel {
+      padding: 28px;
+    }
+
+    .live-window {
+      min-height: 420px;
+      background: #10161f;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .window-bar {
+      display: flex;
+      gap: 8px;
+      padding-bottom: 18px;
+      border-bottom: 2px solid var(--line);
+    }
+
+    .dot {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--black);
+      box-shadow: 2px 2px 0 var(--black);
+    }
+
+    .dot.red { background: var(--red); }
+    .dot.yellow { background: var(--yellow); }
+    .dot.green { background: var(--green); }
+
+    .caption-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      flex: 1;
+    }
+
+    .caption-pane {
+      min-height: 270px;
+      padding: 18px;
+      background: var(--panel-strong);
+      border: 2px solid var(--line);
+    }
+
+    .caption-pane strong {
+      display: block;
+      color: var(--white);
+      margin-bottom: 16px;
+      font-size: 15px;
+    }
+
+    .caption-line {
+      height: 12px;
+      margin: 0 0 12px;
+      background: #dce7f8;
+      box-shadow: 3px 3px 0 var(--black);
+    }
+
+    .caption-line.short {
+      width: 64%;
+    }
+
+    .caption-line.mid {
+      width: 82%;
+      background: #94c9ff;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .feature {
+      padding: 24px;
+      min-height: 228px;
+    }
+
+    .feature .pixel-icon {
+      box-shadow: 5px 5px 0 var(--green);
+    }
+
+    .use-cases {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .use-case {
+      padding: 24px;
+      background: var(--white);
+      color: var(--black);
+      border: 3px solid var(--black);
+      box-shadow: 8px 8px 0 var(--blue);
+    }
+
+    .use-case h3 {
+      margin: 0;
+      font-size: 23px;
+      font-weight: 900;
+    }
+
+    .use-case p {
+      margin: 12px 0 0;
+      color: #2c3542;
+      line-height: 1.58;
+      font-weight: 720;
+    }
+
+    .final {
+      padding-bottom: 120px;
+    }
+
+    .final-panel {
+      position: relative;
+      display: grid;
+      grid-template-columns: 110px 1fr auto;
+      align-items: center;
+      gap: 24px;
+      padding: 30px;
+      background: var(--blue);
+      color: var(--white);
+      border: 4px solid var(--black);
+      box-shadow: 12px 12px 0 var(--black);
+    }
+
+    .final-panel img {
+      width: 110px;
+      height: 110px;
+      border-radius: 24px;
+      image-rendering: pixelated;
+      background: var(--white);
+      border: 3px solid var(--black);
+    }
+
+    .final-panel h2 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 1;
+      font-weight: 900;
+    }
+
+    .final-panel p {
+      margin: 10px 0 0;
+      font-size: 18px;
+      line-height: 1.5;
+      font-weight: 700;
+      color: rgba(255,255,255,0.86);
+    }
+
+    @media (max-width: 900px) {
+      .workflow,
+      .feature-grid,
+      .use-cases,
+      .showcase {
+        grid-template-columns: 1fr;
+      }
+
+      .final-panel {
+        grid-template-columns: 1fr;
+        text-align: left;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .nav {
+        position: static;
+      }
+
+      .nav-links {
+        display: none;
+      }
+
+      .hero {
+        min-height: auto;
+        padding-top: 42px;
+      }
+
+      .caption-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .section {
+        padding: 70px 18px;
+      }
+
+      .button {
+        width: 100%;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <nav class="nav" aria-label="주요 탐색">
+      <a class="brand" href="#top">
+        <img src="Resources/AppIcon.png" alt="AirTranslate 아이콘">
+        <span>AirTranslate</span>
+      </a>
+      <div class="nav-links">
+        <a href="#flow">흐름</a>
+        <a href="#features">기능</a>
+        <a href="#use">활용</a>
+      </div>
+    </nav>
+
+    <section id="top" class="hero">
+      <div class="hero-inner">
+        <div class="app-icon-stage" aria-hidden="true">
+          <img class="app-icon" src="Resources/AppIcon.png" alt="">
+        </div>
+        <h1>Mac에서 들리는 소리를 바로 기록하고 번역합니다.</h1>
+        <p class="hero-copy">
+          AirTranslate는 외부 마이크가 아니라 Mac 시스템 오디오를 듣습니다.
+          영상, 회의, 강의에서 나오는 음성을 실시간 기록으로 남기고 번역까지 이어줍니다.
+        </p>
+        <div class="hero-actions">
+          <a class="button" href="#flow">제품 둘러보기</a>
+          <a class="button secondary" href="#features">핵심 기능</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="flow" class="section">
+      <div class="section-heading">
+        <h2>재생하면 기록되고, 침묵하면 정리됩니다.</h2>
+        <p>
+          실시간 기록은 채팅처럼 흩어지지 않고 메모처럼 계속 이어집니다.
+          숨 고르기 구간에는 문단과 번역 흐름을 정돈해서 읽기 쉬운 기록으로 만듭니다.
+        </p>
+      </div>
+
+      <div class="workflow">
+        <article class="step">
+          <div class="pixel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 7h3v10H4V7Zm5 3h3v7H9v-7Zm5-5h3v12h-3V5Zm5 7h2v5h-2v-5Z"/></svg>
+          </div>
+          <h3>시스템 오디오 캡처</h3>
+          <p>AirPods나 스피커로 들리는 Mac 재생음을 대상으로 기록합니다.</p>
+        </article>
+        <article class="step">
+          <div class="pixel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 4h14v3H5V4Zm0 5h11v3H5V9Zm0 5h14v3H5v-3Zm0 5h8v2H5v-2Z"/></svg>
+          </div>
+          <h3>실시간 기록</h3>
+          <p>음성이 들어오는 즉시 원문 패널에 이어 쓰고, 중간 결과도 부드럽게 갱신합니다.</p>
+        </article>
+        <article class="step">
+          <div class="pixel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 5h8v3H8v11H5V8H3V5Zm9 4h9v3h-9V9Zm0 5h7v3h-7v-3Zm0 5h5v2h-5v-2Z"/></svg>
+          </div>
+          <h3>번역 동기화</h3>
+          <p>원문 흐름과 같은 구조로 번역을 배치해 양쪽 패널을 함께 읽을 수 있습니다.</p>
+        </article>
+        <article class="step">
+          <div class="pixel-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 3h14v18H5V3Zm3 4v2h8V7H8Zm0 4v2h8v-2H8Zm0 4v2h5v-2H8Z"/></svg>
+          </div>
+          <h3>텍스트 저장</h3>
+          <p>캡처를 마치면 날짜와 내용 기반 파일명으로 일반 텍스트 기록을 저장합니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="showcase">
+        <div class="panel live-window" aria-label="AirTranslate 기록 화면 예시">
+          <div class="window-bar" aria-hidden="true">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <div class="caption-grid">
+            <div class="caption-pane">
+              <strong>원문</strong>
+              <div class="caption-line"></div>
+              <div class="caption-line mid"></div>
+              <div class="caption-line short"></div>
+              <div class="caption-line"></div>
+            </div>
+            <div class="caption-pane">
+              <strong>번역</strong>
+              <div class="caption-line mid"></div>
+              <div class="caption-line"></div>
+              <div class="caption-line short"></div>
+              <div class="caption-line mid"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>앱 안에서는 기록, 화면 위에는 자막</h3>
+          <p>
+            메인 앱에서는 원문과 번역을 넓게 비교하고, 플로팅 자막은 영화 자막처럼 필요한 내용만 화면 위에 띄웁니다.
+          </p>
+          <p>
+            상태바 패널에서 보기 방식, 글자 크기, 표시 줄 수를 빠르게 바꾸고, 기록 중에도 앱 화면을 방해하지 않게 사용할 수 있습니다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="section-heading">
+        <h2>실시간 앱답게, 빠르게 보이고 오래 남습니다.</h2>
+        <p>기록의 흐름을 끊지 않으면서도 사용자가 나중에 다시 활용할 수 있도록 설계했습니다.</p>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature">
+          <div class="pixel-icon" aria-hidden="true">A</div>
+          <h3>사용자가 고르는 언어</h3>
+          <p>원문과 번역 언어를 직접 선택해 한국어와 영어 흐름을 명확하게 제어합니다.</p>
+        </article>
+        <article class="feature">
+          <div class="pixel-icon" aria-hidden="true">¶</div>
+          <h3>문단 정리</h3>
+          <p>긴 침묵 구간에는 기록을 삭제하지 않고 문장과 문단을 보기 좋게 정리합니다.</p>
+        </article>
+        <article class="feature">
+          <div class="pixel-icon" aria-hidden="true">TXT</div>
+          <h3>일반 텍스트 저장</h3>
+          <p>JSON이 아니라 기록된 원문 텍스트 그대로 저장해 편집과 재활용이 쉽습니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="use" class="section">
+      <div class="section-heading">
+        <h2>영상, 회의, 강의를 놓치지 않게.</h2>
+        <p>귀로 듣는 정보를 화면과 파일로 바꿔, 다시 읽고 정리할 수 있는 자료로 만듭니다.</p>
+      </div>
+
+      <div class="use-cases">
+        <article class="use-case">
+          <h3>해외 영상</h3>
+          <p>Mac에서 재생하는 콘텐츠를 보면서 원문과 번역을 동시에 확인합니다.</p>
+        </article>
+        <article class="use-case">
+          <h3>온라인 회의</h3>
+          <p>중요한 발화를 실시간 기록으로 남기고, 나중에 텍스트 파일로 다시 봅니다.</p>
+        </article>
+        <article class="use-case">
+          <h3>강의와 튜토리얼</h3>
+          <p>긴 설명을 문단 단위로 정리해 학습 노트처럼 활용할 수 있습니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section final">
+      <div class="final-panel">
+        <img src="Resources/AppIcon.png" alt="AirTranslate 앱 아이콘">
+        <div>
+          <h2>들리는 순간, 기록으로 바뀌는 Mac 앱.</h2>
+          <p>AirTranslate는 시스템 오디오 기반 실시간 기록과 번역을 하나의 조용한 작업 공간으로 묶습니다.</p>
+        </div>
+        <a class="button secondary" href="#top">맨 위로</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

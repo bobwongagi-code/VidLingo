@@ -5,6 +5,38 @@ import Foundation
 final class AppleTranslationService {
     private let availability = LanguageAvailability()
     private var sessionsByLanguagePair: [String: TranslationSession] = [:]
+    private var availabilityByLanguagePair: [String: LanguageAvailability.Status] = [:]
+
+    func prepare(
+        source: LanguageOption,
+        target: LanguageOption,
+        model: IntelligenceModel
+    ) async throws {
+        guard model != .appleSpeechOnly else { return }
+
+        let sourceLanguage = Locale.Language(identifier: source.id)
+        let targetLanguage = Locale.Language(identifier: target.id)
+        let cacheKey = languagePairKey(source: source, target: target)
+        let status = try await availabilityStatus(
+            source: sourceLanguage,
+            target: targetLanguage,
+            cacheKey: cacheKey,
+            sourceTitle: source.localizedTitle,
+            targetTitle: target.localizedTitle
+        )
+        guard status != .unsupported else {
+            throw TranslationServiceError.unsupportedPair(source.localizedTitle, target.localizedTitle)
+        }
+
+        let session = translationSession(
+            source: sourceLanguage,
+            target: targetLanguage,
+            cacheKey: cacheKey
+        )
+        if !(await session.isReady) {
+            try await session.prepareTranslation()
+        }
+    }
 
     func translate(
         _ text: String,
@@ -17,7 +49,14 @@ final class AppleTranslationService {
 
         let sourceLanguage = Locale.Language(identifier: source.id)
         let targetLanguage = Locale.Language(identifier: target.id)
-        let status = await availability.status(from: sourceLanguage, to: targetLanguage)
+        let cacheKey = languagePairKey(source: source, target: target)
+        let status = try await availabilityStatus(
+            source: sourceLanguage,
+            target: targetLanguage,
+            cacheKey: cacheKey,
+            sourceTitle: source.localizedTitle,
+            targetTitle: target.localizedTitle
+        )
 
         guard status != .unsupported else {
             throw TranslationServiceError.unsupportedPair(source.localizedTitle, target.localizedTitle)
@@ -26,7 +65,7 @@ final class AppleTranslationService {
         let session = translationSession(
             source: sourceLanguage,
             target: targetLanguage,
-            cacheKey: languagePairKey(source: source, target: target)
+            cacheKey: cacheKey
         )
         if !(await session.isReady) {
             try await session.prepareTranslation()
@@ -38,6 +77,25 @@ final class AppleTranslationService {
 
     private func languagePairKey(source: LanguageOption, target: LanguageOption) -> String {
         "\(source.id)->\(target.id)"
+    }
+
+    private func availabilityStatus(
+        source: Locale.Language,
+        target: Locale.Language,
+        cacheKey: String,
+        sourceTitle: String,
+        targetTitle: String
+    ) async throws -> LanguageAvailability.Status {
+        if let status = availabilityByLanguagePair[cacheKey] {
+            return status
+        }
+
+        let status = await availability.status(from: source, to: target)
+        availabilityByLanguagePair[cacheKey] = status
+        if status == .unsupported {
+            throw TranslationServiceError.unsupportedPair(sourceTitle, targetTitle)
+        }
+        return status
     }
 
     private func translationSession(

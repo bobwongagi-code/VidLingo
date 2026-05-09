@@ -14,6 +14,13 @@ private enum SettingsKey {
     static let floatingCaptionLineCount = "floatingCaptionLineCount"
 }
 
+private struct TranslationRequest {
+    let line: CaptionLine
+    let sourceText: String
+    let source: LanguageOption
+    let target: LanguageOption
+}
+
 @Observable
 @MainActor
 final class TranslationSessionStore {
@@ -81,6 +88,8 @@ final class TranslationSessionStore {
     private var currentLineID: UUID?
     private var transcriptCleanupTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
+    private var latestTranslationRequest: TranslationRequest?
+    private var translationBurstStartedAt = Date.distantPast
     private var committedSourceText = ""
     private var currentPartialText = ""
     private var pendingParagraphBreakBeforePartial = false
@@ -103,8 +112,7 @@ final class TranslationSessionStore {
     func start() {
         guard !isRunning else { return }
 
-        activeAutosaveTranscriptID = nil
-        activeAutosaveSourceText = ""
+        resetLiveSessionState(clearsVisibleLines: true)
         isPaused = false
         transcriber.setPaused(false)
         isRunning = true
@@ -118,6 +126,7 @@ final class TranslationSessionStore {
                 statusMessage = AppText.startingCapture
                 try await capture.start()
                 statusMessage = AppText.listeningForSpeech
+                warmTranslationSession()
             } catch {
                 isRunning = false
                 stopCaptioners()
@@ -131,26 +140,11 @@ final class TranslationSessionStore {
         guard isRunning else { return }
 
         flushPendingTranscriptSave()
+        resetLiveSessionState(clearsVisibleLines: true)
         isPaused = false
         transcriber.setPaused(false)
         isRunning = false
         statusMessage = AppText.stopped
-        audioSampleCount = 0
-        latestAudioLevel = nil
-        lastRecognizedText = ""
-        lastRecognizedWasFinal = false
-        currentLineID = nil
-        committedSourceText = ""
-        currentPartialText = ""
-        pendingParagraphBreakBeforePartial = false
-        pendingTranslationSourceText = ""
-        stopSpeaking()
-        lastSpokenTranslatedText = ""
-        clearSpokenTranslationUnits()
-        translationTask?.cancel()
-        translationTask = nil
-        transcriptCleanupTask?.cancel()
-        transcriptCleanupTask = nil
         stopCaptioners()
 
         Task {
@@ -271,6 +265,47 @@ final class TranslationSessionStore {
 
     private func stopCaptioners() {
         transcriber.stop()
+    }
+
+    private func resetLiveSessionState(clearsVisibleLines: Bool) {
+        audioSampleCount = 0
+        latestAudioLevel = nil
+        lastRecognizedText = ""
+        lastRecognizedWasFinal = false
+        currentLineID = nil
+        committedSourceText = ""
+        currentPartialText = ""
+        pendingParagraphBreakBeforePartial = false
+        pendingTranslationSourceText = ""
+        latestTranslationRequest = nil
+        translationBurstStartedAt = Date.distantPast
+        activeAutosaveTranscriptID = nil
+        activeAutosaveSourceText = ""
+        stopSpeaking()
+        lastSpokenTranslatedText = ""
+        clearSpokenTranslationUnits()
+        translationTask?.cancel()
+        translationTask = nil
+        transcriptCleanupTask?.cancel()
+        transcriptCleanupTask = nil
+
+        if clearsVisibleLines {
+            lines.removeAll()
+        }
+    }
+
+    private func warmTranslationSession() {
+        let warmSourceLanguage = sourceLanguage
+        let warmTargetLanguage = targetLanguage
+        let warmSelectedModel = selectedModel
+
+        Task { @MainActor in
+            try? await translator.prepare(
+                source: warmSourceLanguage,
+                target: warmTargetLanguage,
+                model: warmSelectedModel
+            )
+        }
     }
 
     private func restoreSelectedSettings() {
@@ -607,17 +642,16 @@ final class TranslationSessionStore {
     private func visibleTranscript() -> String {
         let committed = committedSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         let partial = currentPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let organizedPartial = partial.isEmpty ? "" : organizeTranscript(partial, language: sourceLanguage)
 
         guard !committed.isEmpty else {
-            return organizedPartial
+            return partial
         }
-        guard !organizedPartial.isEmpty else {
+        guard !partial.isEmpty else {
             return committed
         }
 
         let separator = pendingParagraphBreakBeforePartial ? "\n\n" : "\n"
-        return committed + separator + organizedPartial
+        return committed + separator + partial
     }
 
     private func scheduleTranscriptCleanup() {
@@ -939,28 +973,65 @@ final class TranslationSessionStore {
         let sourceText = line.sourceText
         guard pendingTranslationSourceText != sourceText else { return }
         pendingTranslationSourceText = sourceText
-        translationTask?.cancel()
+        if latestTranslationRequest == nil {
+            translationBurstStartedAt = Date()
+        }
+        latestTranslationRequest = TranslationRequest(
+            line: line,
+            sourceText: sourceText,
+            source: source,
+            target: target
+        )
+
+        guard translationTask == nil else {
+            return
+        }
 
         translationTask = Task { @MainActor in
+            await processPendingTranslationRequests()
+        }
+    }
+
+    private func processPendingTranslationRequests() async {
+        while !Task.isCancelled, let request = latestTranslationRequest {
+            latestTranslationRequest = nil
+
             do {
-                try await Task.sleep(for: .milliseconds(180))
-                try Task.checkCancellation()
+                let delay = translationDebounceDelay()
+                if delay > 0 {
+                    try await Task.sleep(for: .milliseconds(delay))
+                }
+
+                if latestTranslationRequest != nil {
+                    continue
+                }
+
+                translationBurstStartedAt = .distantPast
                 let translatedText = try await translateTranscript(
-                    sourceText,
-                    source: source,
-                    target: target
+                    request.sourceText,
+                    source: request.source,
+                    target: request.target
                 )
                 try Task.checkCancellation()
-                updateTranslation(translatedText, for: line, matching: sourceText)
+                updateTranslation(translatedText, for: request.line, matching: request.sourceText)
             } catch is CancellationError {
+                translationTask = nil
                 return
             } catch {
-                if pendingTranslationSourceText == sourceText {
+                if pendingTranslationSourceText == request.sourceText {
                     pendingTranslationSourceText = ""
                 }
                 statusMessage = error.localizedDescription
             }
         }
+
+        translationTask = nil
+    }
+
+    private func translationDebounceDelay() -> Int {
+        guard translationBurstStartedAt != .distantPast else { return 45 }
+        let burstAge = Date().timeIntervalSince(translationBurstStartedAt)
+        return burstAge >= 0.45 ? 0 : 70
     }
 
     private func updateTranslation(_ translatedText: String, for line: CaptionLine, matching sourceText: String) {

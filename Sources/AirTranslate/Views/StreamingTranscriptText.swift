@@ -90,9 +90,9 @@ struct StreamingTranscriptText: View {
         }
 
         let remainingText = String(newText.dropFirst(visibleText.count))
-        let chunkSize = remainingText.count > 72 ? 4 : (remainingText.count > 28 ? 3 : 2)
-        let delay = remainingText.count > 72 ? 18_000_000 : (remainingText.count > 28 ? 28_000_000 : 38_000_000)
-        let fadeDuration = remainingText.count > 72 ? 0.12 : 0.18
+        let chunkSize = remainingText.count > 72 ? 8 : (remainingText.count > 28 ? 6 : 4)
+        let delay = remainingText.count > 72 ? 10_000_000 : (remainingText.count > 28 ? 14_000_000 : 18_000_000)
+        let fadeDuration = remainingText.count > 72 ? 0.08 : 0.12
         let chunks = remainingText.chunkedForTranscriptStreaming(maxCharacters: chunkSize)
 
         streamTask = Task { @MainActor in
