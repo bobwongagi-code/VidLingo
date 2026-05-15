@@ -232,7 +232,46 @@ final class TranslationSessionStore {
         transcriber.delegate = self
         openAITranscriber.delegate = self
         loadSavedTranscripts()
+        loadProductHuntScreenshotDemoIfRequested()
         refreshModelAvailability()
+    }
+
+    private func loadProductHuntScreenshotDemoIfRequested() {
+        guard ProcessInfo.processInfo.environment["AIRTRANSLATE_PRODUCT_HUNT_SCREENSHOTS"] == "1" else {
+            return
+        }
+
+        let now = Date()
+        hasOpenAIAPIKey = false
+        lines = [
+            CaptionLine(
+                sourceText: "The speaker is explaining how the product roadmap changes when customers need live translation during meetings.",
+                translatedText: "The speaker is explaining how the product roadmap changes when customers need live translation during meetings.",
+                translatedSourceText: "The speaker is explaining how the product roadmap changes when customers need live translation during meetings.",
+                createdAt: now.addingTimeInterval(-12),
+                isFinal: true
+            ),
+            CaptionLine(
+                sourceText: "AirTranslate keeps captions visible while you watch a lecture, interview, stream, or video on your Mac.",
+                translatedText: "AirTranslate keeps captions visible while you watch a lecture, interview, stream, or video on your Mac.",
+                translatedSourceText: "AirTranslate keeps captions visible while you watch a lecture, interview, stream, or video on your Mac.",
+                createdAt: now,
+                isFinal: true
+            ),
+        ]
+
+        let demoTranscript = SavedTranscript(
+            id: "product-hunt-demo",
+            sourceFileName: "product-hunt-demo_original.txt",
+            translationFileName: "product-hunt-demo_translation.txt",
+            sourceText: "AirTranslate keeps captions visible while you watch a lecture, interview, stream, or video on your Mac.",
+            translatedText: "AirTranslate keeps captions visible while you watch a lecture, interview, stream, or video on your Mac.",
+            updatedAt: now
+        )
+        savedTranscripts = [demoTranscript]
+        selectedSavedTranscriptID = demoTranscript.id
+        savedDraftSourceText = demoTranscript.sourceText
+        savedDraftTranslationText = demoTranscript.translatedText ?? ""
     }
 
     func start() {

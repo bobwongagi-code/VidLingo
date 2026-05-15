@@ -10,6 +10,10 @@ enum AppText {
     }
 
     private static var interfaceLanguage: InterfaceLanguage {
+        if ProcessInfo.processInfo.environment["AIRTRANSLATE_PRODUCT_HUNT_SCREENSHOTS"] == "1" {
+            return .english
+        }
+
         let languageCode = Locale.preferredLanguages.first?.lowercased() ?? ""
         if languageCode.hasPrefix("ko") {
             return .korean
