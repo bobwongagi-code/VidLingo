@@ -1,4 +1,6 @@
-![AirTranslate hero](docs/assets/airtranslate-readme-hero.png)
+<p align="center">
+  <video src="docs/assets/airtranslate-readme-demo.mp4" poster="docs/assets/airtranslate-readme-hero.png" controls autoplay muted loop playsinline width="100%"></video>
+</p>
 
 # AirTranslate
 
