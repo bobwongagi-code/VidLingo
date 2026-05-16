@@ -1,5 +1,16 @@
 # AirTranslate Version History
 
+## 1.3.1 - 2026-05-16
+
+### Changed
+
+- Temporarily disabled Apple basic-mode source language auto-detection while language-switch handling is improved.
+- Added a clear in-app notice when the disabled auto-detect toggle is clicked.
+
+### Fixed
+
+- Prevented saved auto-detect preferences from re-enabling the feature in this build.
+
 ## 1.3.0 - 2026-05-16
 
 ### Added

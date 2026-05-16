@@ -51,6 +51,7 @@ The default workflow uses Apple frameworks. GPT-powered realtime models are opti
 - Built-in, Bluetooth, and AirPods mic input support
 - GPT mode with OpenAI Realtime transcription and translation
 - Microphone input stability fixes for duplicate segments and noisy transitions
+- Apple basic-mode source-language auto-detect is temporarily disabled while language-switch handling is improved.
 - Realtime translation-only model path
 - One-click source/target language swap
 - Floating caption window
@@ -65,7 +66,7 @@ AirTranslate separates the quick choice from the detailed setup.
 
 | Mode | Best For | Details |
 | --- | --- | --- |
-| Apple Mode | Local-first transcription and translation | Uses Apple Speech for transcription and Apple Translation for the selected language pair, with source-language auto-detect when Apple basic mode can infer it. |
+| Apple Mode | Local-first transcription and translation | Uses Apple Speech for transcription and Apple Translation for the selected language pair. Source-language auto-detect is temporarily disabled while language-switch handling is improved. |
 | GPT Mode | OpenAI Realtime transcription or translation | Enables GPT realtime models. If no API key is saved, AirTranslate opens the settings modal and focuses the API key field. |
 | Transcribe Only | Source captions without translation | Records source-language captions without running translation. |
 | Realtime Translation Only | Direct translated stream | Uses the realtime translation model path when you want the model to produce the translated stream directly. |
@@ -115,7 +116,7 @@ Download the latest open-source build from [GitHub Releases](https://github.com/
 AirTranslate remains fully open-source under the Apache-2.0 License. The DMG is provided only as a convenient macOS installer, while all source code, build scripts, release materials, LICENSE, and NOTICE files remain available in this repository.
 
 - [Download AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [Download AirTranslate-1.3.0.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.3.0.zip)
+- [Download AirTranslate-1.3.1.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.3.1.zip)
 - [Download AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [View version history](Release/VERSION-HISTORY.md)
 

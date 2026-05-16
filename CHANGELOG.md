@@ -6,6 +6,18 @@ All notable changes to AirTranslate are documented in this file.
 
 No unreleased changes yet.
 
+## 1.3.1 - 2026-05-16
+
+### Changed
+
+- Temporarily disabled Apple basic-mode source-language auto-detection while the mid-session language-switch behavior is improved.
+- Added an in-app notice when the disabled auto-detect toggle is clicked.
+- Updated release packaging metadata for the 1.3.1 hotfix build.
+
+### Fixed
+
+- Prevented previously saved auto-detect settings from enabling the feature in the current build.
+
 ## 1.3.0 - 2026-05-16
 
 ### Added
