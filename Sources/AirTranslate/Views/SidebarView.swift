@@ -10,13 +10,17 @@ struct SidebarView: View {
     @State private var shouldFocusOpenAIAPIKey = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                operationalHeader
-                sessionCard
-            }
-            .padding(12)
+        VStack(alignment: .leading, spacing: 10) {
+            Color.clear
+                .frame(height: 92)
+                .accessibilityHidden(true)
+
+            operationalHeader
+            sessionCard
         }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.bar)
         .navigationTitle("AirTranslate")
         .sheet(isPresented: $isLibraryPresented) {
@@ -39,10 +43,10 @@ struct SidebarView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(AppText.appName)
-                    .font(.headline.weight(.semibold))
+                    .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.86)
+                    .minimumScaleFactor(0.78)
 
                 Text(AppText.appTagline)
                     .font(.caption.weight(.semibold))
@@ -74,7 +78,7 @@ struct SidebarView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 14)
+        .padding(.vertical, 12)
         .frame(minHeight: 76)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -97,7 +101,7 @@ struct SidebarView: View {
 
                     openConfigurationButton
                 }
-                .padding(.bottom, 12)
+                .padding(.bottom, 10)
 
                 languageControls
 
@@ -136,7 +140,7 @@ struct SidebarView: View {
                 )
 
                 libraryButton
-                    .padding(.top, 14)
+                    .padding(.top, 10)
             }
         }
         .onAppear {
@@ -167,8 +171,8 @@ struct SidebarView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .bottom, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 7) {
                     if session.isAppleSourceAutoDetectionEnabled {
                         OperationalAutoLanguagePicker(title: AppText.from)
                     } else {
@@ -181,7 +185,7 @@ struct SidebarView: View {
                         Image(systemName: "arrow.left.arrow.right")
                             .font(.caption.weight(.bold))
                             .foregroundStyle(Color.accentColor)
-                            .frame(width: 32, height: 32)
+                            .frame(width: 30, height: 30)
                             .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -634,7 +638,7 @@ private struct SidebarDeckDivider: View {
         Rectangle()
             .fill(Color.primary.opacity(0.065))
             .frame(height: 1)
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
             .accessibilityHidden(true)
     }
 }
@@ -658,21 +662,26 @@ private struct OperationalLanguagePicker: View {
                 }
             } label: {
                 HStack(spacing: 6) {
+                    Image(systemName: "globe")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+
                     Text(selection.localizedTitle)
-                        .font(.callout.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 2)
 
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -699,16 +708,21 @@ private struct OperationalAutoLanguagePicker: View {
                 .lineLimit(1)
 
             HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 14)
+
                 Text(AppText.autoDetectShort)
-                    .font(.callout.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 2)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
