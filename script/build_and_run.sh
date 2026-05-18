@@ -9,6 +9,8 @@ SCRIPT_DIR="$ROOT_DIR/script"
 source "$SCRIPT_DIR/app_metadata.sh"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+USER_APPLICATIONS_DIR="$HOME/Applications"
+USER_APP_BUNDLE="$USER_APPLICATIONS_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
@@ -18,7 +20,19 @@ CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
 
 cd "$ROOT_DIR"
 
+if [[ "$MODE" == "--open-existing" || "$MODE" == "open-existing" ]]; then
+  if [[ ! -x "$APP_BINARY" ]]; then
+    echo "Existing app bundle not found. Run ./script/build_and_run.sh once first." >&2
+    exit 1
+  fi
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+  pkill -x VidLingo >/dev/null 2>&1 || true
+  /usr/bin/open -n "$APP_BUNDLE"
+  exit 0
+fi
+
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+pkill -x VidLingo >/dev/null 2>&1 || true
 
 swift build
 BUILD_BINARY="$(swift build --show-bin-path)/$APP_NAME"
@@ -51,16 +65,13 @@ else
 fi
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  mkdir -p "$USER_APPLICATIONS_DIR"
+  rm -rf "$USER_APP_BUNDLE"
+  cp -R "$APP_BUNDLE" "$USER_APP_BUNDLE"
+  /usr/bin/open -n "$USER_APP_BUNDLE"
 }
 
 case "$MODE" in
-  --reset-permissions|reset-permissions)
-    /usr/bin/tccutil reset ScreenCapture "$BUNDLE_ID" || true
-    /usr/bin/tccutil reset AudioCapture "$BUNDLE_ID" || true
-    /usr/bin/tccutil reset SpeechRecognition "$BUNDLE_ID" || true
-    echo "Reset AirTranslate privacy grants. Relaunch and approve Screen Recording, System Audio Recording, and Speech Recognition once."
-    ;;
   run)
     open_app
     ;;
@@ -81,7 +92,7 @@ case "$MODE" in
     pgrep -x "$APP_NAME" >/dev/null
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--reset-permissions]" >&2
+    echo "usage: $0 [run|--open-existing|--debug|--logs|--telemetry|--verify]" >&2
     exit 2
     ;;
 esac

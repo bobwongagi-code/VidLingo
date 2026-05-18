@@ -51,10 +51,6 @@ PLIST
   </array>
   <key>LSApplicationCategoryType</key>
   <string>$CATEGORY</string>
-  <key>NSAudioCaptureUsageDescription</key>
-  <string>AirTranslate captures system audio only after you start capture so it can transcribe and translate what is playing on this Mac.</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>AirTranslate can optionally capture microphone audio after you choose Microphone input and start capture.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSHumanReadableCopyright</key>
@@ -62,18 +58,12 @@ PLIST
 PLIST
   else
     cat <<PLIST
-  <key>NSAppleEventsUsageDescription</key>
-  <string>AirTranslate does not automate other apps.</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>AirTranslate can optionally capture microphone audio after you choose Microphone input and start capture.</string>
-  <key>NSSystemAudioCaptureUsageDescription</key>
-  <string>AirTranslate captures Mac system audio so it can transcribe and translate what is playing.</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
 PLIST
   fi
 
   cat <<PLIST
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>AirTranslate uses speech recognition to convert captured Mac audio into live captions and translations.</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
 </dict>

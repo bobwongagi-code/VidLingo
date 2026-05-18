@@ -1,35 +1,23 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.0
 
 import PackageDescription
 
 let package = Package(
-    name: "AirTranslate",
+    name: "VidLingo",
     platforms: [
-        .macOS(.v26)
+        .macOS(.v15)
     ],
     products: [
-        .executable(name: "AirTranslate", targets: ["AirTranslate"])
+        .executable(name: "VidLingo", targets: ["VidLingo"])
     ],
     targets: [
-        .target(name: "AirTranslateCore"),
+        .target(name: "VidLingoCore"),
         .executableTarget(
-            name: "AirTranslate",
-            dependencies: ["AirTranslateCore"],
+            name: "VidLingo",
+            dependencies: ["VidLingoCore"],
             linkerSettings: [
-                .linkedFramework("AVFAudio"),
-                .linkedFramework("AudioToolbox"),
-                .linkedFramework("CoreAudio"),
-                .linkedFramework("ScreenCaptureKit"),
-                .linkedFramework("Security"),
-                .linkedFramework("Speech"),
-                .linkedFramework("Translation")
-            ]
-        ),
-        .testTarget(
-            name: "AirTranslateCoreTests",
-            dependencies: [
-                "AirTranslateCore",
-                "AirTranslate"
+                .linkedFramework("AVKit"),
+                .linkedFramework("Security")
             ]
         )
     ]
