@@ -10,7 +10,7 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: 16) {
                 appHeader
                 languageSection
-                apiKeySection
+                modelSection
                 librarySection
             }
             .padding(18)
@@ -77,32 +77,50 @@ struct SidebarView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var apiKeySection: some View {
+    private var modelSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(AppText.deepSeekAPIKey)
+            Text(AppText.translationModelSettings)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            SecureField(AppText.deepSeekAPIKeyPlaceholder, text: $apiKey)
+            Picker(AppText.translationProvider, selection: $session.translationProvider) {
+                ForEach(TranslationProviderID.allCases) { provider in
+                    Text(provider.title).tag(provider)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(session.isOfflineVideoProcessing)
+
+            TextField(AppText.translationModelPlaceholder, text: $session.translationModelName)
+                .textFieldStyle(.roundedBorder)
+                .disabled(session.isOfflineVideoProcessing)
+
+            if session.translationProvider == .custom {
+                TextField(AppText.translationEndpointPlaceholder, text: $session.customTranslationBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(session.isOfflineVideoProcessing)
+            }
+
+            SecureField(AppText.translationAPIKeyPlaceholder(session.translationProvider.title), text: $apiKey)
                 .textFieldStyle(.roundedBorder)
 
             HStack {
-                Text(session.hasDeepSeekAPIKey ? AppText.deepSeekAPIKeyConfigured : AppText.deepSeekAPIKeyNotConfigured)
+                Text(session.hasTranslationAPIKey ? AppText.translationAPIKeyConfigured : AppText.translationAPIKeyNotConfigured)
                     .font(.caption)
-                    .foregroundStyle(session.hasDeepSeekAPIKey ? .green : .secondary)
+                    .foregroundStyle(session.hasTranslationAPIKey ? .green : .secondary)
                 Spacer()
-                Button(AppText.saveDeepSeekAPIKey) {
-                    session.saveDeepSeekAPIKey(apiKey)
+                Button(AppText.saveTranslationAPIKey) {
+                    session.saveTranslationAPIKey(apiKey)
                     apiKey = ""
                 }
                 .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            Button(AppText.removeDeepSeekAPIKey) {
-                session.removeDeepSeekAPIKey()
+            Button(AppText.removeTranslationAPIKey) {
+                session.removeTranslationAPIKey()
                 apiKey = ""
             }
-            .disabled(!session.hasDeepSeekAPIKey)
+            .disabled(!session.hasTranslationAPIKey)
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

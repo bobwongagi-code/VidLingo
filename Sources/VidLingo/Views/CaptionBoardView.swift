@@ -58,12 +58,15 @@ private struct OfflineVideoImportPanel: View {
 
                 Spacer(minLength: 12)
 
-                Button(action: importVideo) {
-                    Label(AppText.importVideo, systemImage: "plus.rectangle.on.folder")
-                        .font(.callout.weight(.semibold))
+                if session.isOfflineVideoProcessing {
+                    ProcessingStatusPill(text: AppText.processing)
+                } else {
+                    Button(action: importVideo) {
+                        Label(AppText.importVideo, systemImage: "plus.rectangle.on.folder")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(session.isOfflineVideoProcessing)
             }
 
             HStack(spacing: 10) {
@@ -82,6 +85,7 @@ private struct OfflineVideoImportPanel: View {
                     videoURL: videoURL,
                     fileName: session.offlineVideoFileName,
                     durationText: session.offlineVideoDurationText,
+                    isProcessing: session.isOfflineVideoProcessing,
                     canStartTranslation: !session.isOfflineVideoProcessing,
                     startTranslation: startTranslation
                 )
@@ -97,6 +101,7 @@ private struct OfflineVideoPreviewCard: View {
     let videoURL: URL
     let fileName: String
     let durationText: String
+    let isProcessing: Bool
     let canStartTranslation: Bool
     let startTranslation: () -> Void
     @State private var thumbnail: NSImage?
@@ -138,22 +143,26 @@ private struct OfflineVideoPreviewCard: View {
 
                 Spacer(minLength: 10)
 
-                Button {
-                    togglePreview()
-                } label: {
-                    Label(isPreviewVisible ? AppText.hidePreview : AppText.playPreview, systemImage: isPreviewVisible ? "chevron.up" : "play.rectangle")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                if isProcessing {
+                    ProcessingStatusPill(text: AppText.processingVideo)
+                } else {
+                    Button {
+                        togglePreview()
+                    } label: {
+                        Label(isPreviewVisible ? AppText.hidePreview : AppText.playPreview, systemImage: isPreviewVisible ? "chevron.up" : "play.rectangle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
 
-                Button {
-                    startTranslation()
-                } label: {
-                    Label(AppText.startOfflineTranslation, systemImage: "text.bubble.fill")
+                    Button {
+                        startTranslation()
+                    } label: {
+                        Label(AppText.startOfflineTranslation, systemImage: "text.bubble.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!canStartTranslation)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(!canStartTranslation)
             }
 
             if isPreviewVisible {
@@ -238,6 +247,31 @@ private struct OfflineVideoPreviewCard: View {
                 }
             }
         }.value
+    }
+}
+
+private struct ProcessingStatusPill: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.72)
+
+            Text(text)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(0.055), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.08))
+        }
+        .accessibilityLabel(text)
     }
 }
 

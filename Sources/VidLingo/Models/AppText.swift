@@ -11,7 +11,7 @@ enum AppText {
     static let original = "Original"
     static let translation = "Translation"
     static let originalDescription = "Whisper 本地转写结果。"
-    static let translationDescription = "DeepSeek 生成的中文译文。"
+    static let translationDescription = "所选模型生成的中文译文。"
     static let importVideo = "导入视频"
     static let shortVideoOfflineTranslator = "短视频离线翻译器"
     static let productContext = "商品类型"
@@ -20,25 +20,27 @@ enum AppText {
     static let playPreview = "播放预览"
     static let hidePreview = "收起预览"
     static let startOfflineTranslation = "开始翻译"
-    static let confirmVideoContent = "等待 Whisper 和 DeepSeek 处理前，先确认导入的是目标视频。"
+    static let processing = "处理中"
+    static let processingVideo = "视频处理中"
+    static let confirmVideoContent = "等待 Whisper 和所选模型处理前，先确认导入的是目标视频。"
     static let autoDetectInput = "自动检测输入语言"
     static let noCaptionsYet = "导入一个短视频"
-    static let noCaptionsDescription = "选择本地 .mov 或 .mp4 文件。VidLingo 会本地转写，再用 DeepSeek 翻译完整文稿。"
+    static let noCaptionsDescription = "选择本地 .mov 或 .mp4 文件。VidLingo 会本地转写，再用所选模型翻译完整文稿。"
     static let translating = "正在翻译..."
 
-    static let deepSeekAPIKey = "DeepSeek API key"
-    static let deepSeekAPIKeyPlaceholder = "粘贴 API key"
-    static let deepSeekAPIKeyConfigured = "API key 已保存"
-    static let deepSeekAPIKeyNotConfigured = "未保存 API key"
-    static let saveDeepSeekAPIKey = "保存"
-    static let removeDeepSeekAPIKey = "删除 API key"
-    static let deepSeekAPIKeySaved = "API key 已保存到 Keychain。"
-    static let deepSeekAPIKeyRemoved = "API key 已删除。"
-    static let deepSeekAPIKeyEmpty = "保存前请输入 API key。"
-    static let deepSeekAPIKeyInvalidStoredValue = "保存的 API key 无法读取。"
-    static let deepSeekAPIKeyMissing = "使用 DeepSeek 翻译前，请先保存 API key。"
-    static let deepSeekInvalidResponse = "DeepSeek 返回了无效响应。"
-    static let deepSeekEmptyOutput = "DeepSeek 没有返回译文。"
+    static let translationModelSettings = "翻译模型"
+    static let translationProvider = "模型服务"
+    static let translationModelPlaceholder = "模型名，例如 gpt-4o-mini / qwen-plus"
+    static let translationEndpointPlaceholder = "OpenAI-compatible chat completions URL"
+    static let translationAPIKeyConfigured = "API key 已保存"
+    static let translationAPIKeyNotConfigured = "未保存 API key"
+    static let saveTranslationAPIKey = "保存"
+    static let removeTranslationAPIKey = "删除 API key"
+    static let translationAPIKeyEmpty = "保存前请输入 API key。"
+    static let translationAPIKeyInvalidStoredValue = "保存的 API key 无法读取。"
+    static let translationModelMissing = "翻译模型名不能为空。"
+    static let translationEndpointInvalid = "Custom endpoint 不是有效 URL。"
+    static let translationInvalidResponse = "模型服务返回了无效响应。"
 
     static let savedTranscripts = "资料库"
     static let manageSavedTranscripts = "管理已保存记录"
@@ -87,8 +89,8 @@ enum AppText {
         "正在用本地 Whisper 转写 \(fileName)..."
     }
 
-    static func offlineVideoTranslating(_ fileName: String) -> String {
-        "正在用 DeepSeek 翻译 \(fileName)..."
+    static func offlineVideoTranslating(_ fileName: String, provider: String) -> String {
+        "正在用 \(provider) 翻译 \(fileName)..."
     }
 
     static func offlineVideoComplete(_ fileName: String) -> String {
@@ -103,12 +105,32 @@ enum AppText {
         "保存资料库失败：\(message)"
     }
 
-    static func deepSeekRequestFailed(statusCode: Int, message: String?) -> String {
-        let detail = message.map { ": \($0)" } ?? ""
-        return "DeepSeek 请求失败（\(statusCode)）\(detail)"
+    static func translationAPIKeyPlaceholder(_ provider: String) -> String {
+        "粘贴 \(provider) API key"
     }
 
-    static func deepSeekAPIKeychainFailed(_ status: OSStatus) -> String {
+    static func translationAPIKeySaved(_ provider: String) -> String {
+        "\(provider) API key 已保存到 Keychain。"
+    }
+
+    static func translationAPIKeyRemoved(_ provider: String) -> String {
+        "\(provider) API key 已删除。"
+    }
+
+    static func translationAPIKeyMissing(_ provider: String) -> String {
+        "使用 \(provider) 翻译前，请先保存 API key。"
+    }
+
+    static func translationEmptyOutput(_ provider: String) -> String {
+        "\(provider) 没有返回译文。"
+    }
+
+    static func translationRequestFailed(provider: String, statusCode: Int, message: String?) -> String {
+        let detail = message.map { ": \($0)" } ?? ""
+        return "\(provider) 请求失败（\(statusCode)）\(detail)"
+    }
+
+    static func translationAPIKeychainFailed(_ status: OSStatus) -> String {
         "Keychain 操作失败（\(status)）。"
     }
 }

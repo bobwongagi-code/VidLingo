@@ -1,6 +1,6 @@
 # VidLingo
 
-VidLingo is a local-first macOS short-video translator. It imports a local video, extracts speech audio, transcribes it with local Whisper, and translates the complete transcript to Simplified Chinese with DeepSeek.
+VidLingo is a local-first macOS short-video translator. It imports a local video, extracts speech audio, transcribes it with local Whisper, and translates the complete transcript to Simplified Chinese with your selected LLM provider.
 
 The current workflow is offline-first and short-video oriented. It no longer captures realtime Mac audio, microphone audio, or screen content.
 
@@ -12,6 +12,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Transcribe locally with `whisper.cpp`.
 - Detect the spoken language from Whisper when auto detection is enabled.
 - Translate the full transcript with a short-video e-commerce prompt.
+- Choose DeepSeek, OpenAI, Qwen, Claude-compatible, or a custom OpenAI-compatible endpoint.
 - Save original and Chinese translation text files locally.
 
 ## Requirements
@@ -21,7 +22,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - `ffmpeg` available on `PATH`.
 - `whisper-cli` or `main` from `whisper.cpp` available on `PATH`.
 - A local Whisper model, preferably `ggml-large-v3-turbo-q5_0.bin`.
-- A DeepSeek API key saved in the app.
+- An API key for the selected translation provider.
 
 VidLingo looks for Whisper models in:
 
@@ -32,6 +33,29 @@ VidLingo looks for Whisper models in:
 ```
 
 The old `AirTranslate` model path is kept as a migration fallback.
+
+## Translation Providers
+
+VidLingo uses a shared Chat Completions-style request for these built-in providers:
+
+```text
+DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flash
+OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
+Qwen / 千问     https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  qwen-plus
+Qwen-MT        same Qwen endpoint, model names like qwen-mt-flash or qwen-mt-plus
+Claude         https://api.anthropic.com/v1/chat/completions    claude-sonnet-4-5-20250929
+Custom         user-provided OpenAI-compatible chat completions URL
+```
+
+API keys are stored in macOS Keychain per provider. The previous DeepSeek key is still read as a migration fallback.
+
+When the selected Qwen model name starts with `qwen-mt-`, VidLingo uses Qwen-MT's required `translation_options` request shape instead of the normal chat prompt.
+
+The translation system prompt is bundled from:
+
+```text
+Resources/TranslationSystemPrompt.md
+```
 
 ## Run Locally
 

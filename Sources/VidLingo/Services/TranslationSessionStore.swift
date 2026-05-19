@@ -8,6 +8,12 @@ private enum SettingsKey {
     static let sourceLanguageID = "sourceLanguageID"
     static let targetLanguageID = "targetLanguageID"
     static let isSourceAutoDetectionEnabled = "isSourceAutoDetectionEnabled"
+    static let translationProviderID = "translationProviderID"
+    static let customTranslationBaseURL = "customTranslationBaseURL"
+
+    static func translationModelName(provider: TranslationProviderID) -> String {
+        "translationModelName.\(provider.rawValue)"
+    }
 }
 
 @Observable
@@ -22,7 +28,21 @@ final class TranslationSessionStore {
     var isSourceAutoDetectionEnabled = true {
         didSet { persistSelectedSettings() }
     }
-    var hasDeepSeekAPIKey = DeepSeekAPIKeyStore.hasAPIKey()
+    var translationProvider = TranslationProviderID.deepSeek {
+        didSet {
+            guard !isRestoringSelectedSettings else { return }
+            translationModelName = storedTranslationModelName(for: translationProvider)
+            hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: translationProvider)
+            persistSelectedSettings()
+        }
+    }
+    var translationModelName = TranslationProviderID.deepSeek.defaultModel {
+        didSet { persistTranslationModelName() }
+    }
+    var customTranslationBaseURL = "" {
+        didSet { persistSelectedSettings() }
+    }
+    var hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: .deepSeek)
     var statusMessage = AppText.ready
     var lines: [CaptionLine] = []
     var offlineVideoProductContext = "清洁机 / 家居清洁设备"
@@ -66,6 +86,9 @@ final class TranslationSessionStore {
         let fallbackSource = sourceLanguage
         let target = targetLanguage
         let productContext = offlineVideoProductContext
+        let provider = translationProvider
+        let modelName = translationModelName
+        let customBaseURL = customTranslationBaseURL
         let shouldAutoDetectLanguage = isSourceAutoDetectionEnabled
         let didAccess = videoURL.startAccessingSecurityScopedResource()
 
@@ -125,12 +148,15 @@ final class TranslationSessionStore {
                     )
                 ]
 
-                statusMessage = AppText.offlineVideoTranslating(videoURL.lastPathComponent)
-                let translatedText = try await DeepSeekTranslationService().translateShortVideoTranscript(
+                statusMessage = AppText.offlineVideoTranslating(videoURL.lastPathComponent, provider: provider.title)
+                let translatedText = try await LLMTranslationService().translateShortVideoTranscript(
                     sourceText,
                     source: transcriptSource,
                     target: target,
-                    productContext: productContext
+                    productContext: productContext,
+                    provider: provider,
+                    modelName: modelName,
+                    customBaseURL: customBaseURL
                 )
 
                 lines = [
@@ -162,21 +188,21 @@ final class TranslationSessionStore {
         }
     }
 
-    func saveDeepSeekAPIKey(_ key: String) {
+    func saveTranslationAPIKey(_ key: String) {
         do {
-            try DeepSeekAPIKeyStore.saveAPIKey(key)
-            hasDeepSeekAPIKey = true
-            statusMessage = AppText.deepSeekAPIKeySaved
+            try TranslationAPIKeyStore.saveAPIKey(key, for: translationProvider)
+            hasTranslationAPIKey = true
+            statusMessage = AppText.translationAPIKeySaved(translationProvider.title)
         } catch {
             statusMessage = error.localizedDescription
         }
     }
 
-    func removeDeepSeekAPIKey() {
+    func removeTranslationAPIKey() {
         do {
-            try DeepSeekAPIKeyStore.deleteAPIKey()
-            hasDeepSeekAPIKey = false
-            statusMessage = AppText.deepSeekAPIKeyRemoved
+            try TranslationAPIKeyStore.deleteAPIKey(for: translationProvider)
+            hasTranslationAPIKey = false
+            statusMessage = AppText.translationAPIKeyRemoved(translationProvider.title)
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -392,6 +418,13 @@ final class TranslationSessionStore {
         if defaults.object(forKey: SettingsKey.isSourceAutoDetectionEnabled) != nil {
             isSourceAutoDetectionEnabled = defaults.bool(forKey: SettingsKey.isSourceAutoDetectionEnabled)
         }
+        if let providerID = defaults.string(forKey: SettingsKey.translationProviderID),
+           let provider = TranslationProviderID(rawValue: providerID) {
+            translationProvider = provider
+        }
+        customTranslationBaseURL = defaults.string(forKey: SettingsKey.customTranslationBaseURL) ?? ""
+        translationModelName = storedTranslationModelName(for: translationProvider)
+        hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: translationProvider)
     }
 
     private func persistSelectedSettings() {
@@ -400,5 +433,21 @@ final class TranslationSessionStore {
         defaults.set(sourceLanguage.id, forKey: SettingsKey.sourceLanguageID)
         defaults.set(targetLanguage.id, forKey: SettingsKey.targetLanguageID)
         defaults.set(isSourceAutoDetectionEnabled, forKey: SettingsKey.isSourceAutoDetectionEnabled)
+        defaults.set(translationProvider.rawValue, forKey: SettingsKey.translationProviderID)
+        defaults.set(customTranslationBaseURL, forKey: SettingsKey.customTranslationBaseURL)
+    }
+
+    private func persistTranslationModelName() {
+        guard !isRestoringSelectedSettings else { return }
+        UserDefaults.standard.set(
+            translationModelName,
+            forKey: SettingsKey.translationModelName(provider: translationProvider)
+        )
+    }
+
+    private func storedTranslationModelName(for provider: TranslationProviderID) -> String {
+        let storedModel = UserDefaults.standard.string(forKey: SettingsKey.translationModelName(provider: provider))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return storedModel.isEmpty ? provider.defaultModel : storedModel
     }
 }
