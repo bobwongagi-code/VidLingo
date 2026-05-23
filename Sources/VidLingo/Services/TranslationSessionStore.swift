@@ -45,11 +45,12 @@ final class TranslationSessionStore {
     var hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: .deepSeek)
     var statusMessage = AppText.ready
     var lines: [CaptionLine] = []
-    var offlineVideoProductContext = "清洁机 / 家居清洁设备"
+    var offlineVideoProductContext = ""
     var offlineVideoURL: URL?
     var offlineVideoFileName = ""
     var offlineVideoDurationText = ""
     var isOfflineVideoProcessing = false
+    var isProductContextInferenceEnabled = true
     var savedTranscriptContentMode = SavedTranscriptContentMode.originalAndTranslation
     var savedTranscripts: [SavedTranscript] = []
     var selectedSavedTranscriptID: String?
@@ -65,6 +66,7 @@ final class TranslationSessionStore {
 
     func selectOfflineVideo(_ videoURL: URL) {
         lines.removeAll()
+        offlineVideoProductContext = ""
         offlineVideoURL = videoURL
         offlineVideoFileName = videoURL.lastPathComponent
         offlineVideoDurationText = ""
@@ -85,11 +87,12 @@ final class TranslationSessionStore {
 
         let fallbackSource = sourceLanguage
         let target = targetLanguage
-        let productContext = offlineVideoProductContext
+        let initialProductContext = offlineVideoProductContext
         let provider = translationProvider
         let modelName = translationModelName
         let customBaseURL = customTranslationBaseURL
         let shouldAutoDetectLanguage = isSourceAutoDetectionEnabled
+        let shouldInferProductContext = isProductContextInferenceEnabled
         let didAccess = videoURL.startAccessingSecurityScopedResource()
 
         offlineVideoURL = videoURL
@@ -135,6 +138,48 @@ final class TranslationSessionStore {
                 guard !sourceText.isEmpty else {
                     throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
                 }
+                guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
+                    let visualSourceText = AppText.noEffectiveSpeech
+                    if LLMTranslationService.supportsProductContextFrames(provider: provider, modelName: modelName) {
+                        statusMessage = AppText.generatingVisualSalesCopy(videoURL.lastPathComponent)
+                        let frameJPEGData = await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
+                        if let visualCopy = try? await LLMTranslationService().generateVisualSalesCopy(
+                            fileName: videoURL.lastPathComponent,
+                            durationText: offlineVideoDurationText,
+                            productContext: initialProductContext,
+                            frameJPEGData: frameJPEGData,
+                            provider: provider,
+                            modelName: modelName,
+                            customBaseURL: customBaseURL
+                        ) {
+                            let translatedText = "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)"
+                            lines = [
+                                CaptionLine(
+                                    sourceText: visualSourceText,
+                                    translatedText: translatedText,
+                                    translatedSourceText: visualSourceText,
+                                    createdAt: Date(),
+                                    isFinal: true
+                                )
+                            ]
+                            saveOfflineVideoTranscript(sourceText: visualSourceText, translatedText: translatedText)
+                            statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
+                            return
+                        }
+                    }
+
+                    lines = [
+                        CaptionLine(
+                            sourceText: visualSourceText,
+                            translatedText: AppText.noEffectiveSpeechDescription,
+                            translatedSourceText: visualSourceText,
+                            createdAt: Date(),
+                            isFinal: true
+                        )
+                    ]
+                    statusMessage = AppText.noEffectiveSpeech
+                    return
+                }
 
                 let createdAt = Date()
                 lines = [
@@ -147,6 +192,33 @@ final class TranslationSessionStore {
                         revision: 1
                     )
                 ]
+
+                var productContext = initialProductContext.trimmingCharacters(in: .whitespacesAndNewlines)
+                if shouldInferProductContext && productContext.isEmpty {
+                    statusMessage = AppText.inferringProductContext(videoURL.lastPathComponent)
+                    let frameJPEGData = if LLMTranslationService.supportsProductContextFrames(
+                        provider: provider,
+                        modelName: modelName
+                    ) {
+                        await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
+                    } else {
+                        [Data]()
+                    }
+                    if let inferredContext = try? await LLMTranslationService().inferProductContext(
+                        from: sourceText,
+                        fileName: videoURL.lastPathComponent,
+                        frameJPEGData: frameJPEGData,
+                        source: transcriptSource,
+                        provider: provider,
+                        modelName: modelName,
+                        customBaseURL: customBaseURL
+                    ) {
+                        if !inferredContext.isEmpty && inferredContext != AppText.unknownProductContext {
+                            productContext = inferredContext
+                            offlineVideoProductContext = inferredContext
+                        }
+                    }
+                }
 
                 statusMessage = AppText.offlineVideoTranslating(videoURL.lastPathComponent, provider: provider.title)
                 let translatedText = try await LLMTranslationService().translateShortVideoTranscript(
@@ -186,6 +258,11 @@ final class TranslationSessionStore {
                 }
             }
         }
+    }
+
+    func clearProductContext() {
+        guard !isOfflineVideoProcessing else { return }
+        offlineVideoProductContext = ""
     }
 
     func saveTranslationAPIKey(_ key: String) {
@@ -392,6 +469,57 @@ final class TranslationSessionStore {
 
     private func organizeTranscript(_ text: String, language: LanguageOption) -> String {
         TranscriptTextProcessor.organizeTranscript(text, languageID: language.id)
+    }
+
+    private func hasEffectiveSpeechTranscript(_ text: String, language: LanguageOption) -> Bool {
+        let normalizedText = text.lowercased()
+        let letterCount = normalizedText.unicodeScalars.filter {
+            CharacterSet.letters.contains($0)
+        }.count
+        guard letterCount >= 12 else { return false }
+
+        if usesUnspacedScript(language) {
+            return !containsKnownHallucination(in: normalizedText)
+        }
+
+        let words = normalizedText
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        guard words.count >= 6 else { return false }
+
+        let uniqueWordRatio = Double(Set(words).count) / Double(words.count)
+        if uniqueWordRatio < 0.35 {
+            return false
+        }
+
+        let lines = normalizedText
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if lines.count >= 3, Set(lines).count <= max(1, lines.count / 3) {
+            return false
+        }
+
+        if containsKnownHallucination(in: normalizedText) {
+            return false
+        }
+
+        return true
+    }
+
+    private func usesUnspacedScript(_ language: LanguageOption) -> Bool {
+        ["th-TH", "zh-CN", "ja-JP"].contains(language.id)
+    }
+
+    private func containsKnownHallucination(in normalizedText: String) -> Bool {
+        let hallucinationPhrases = [
+            "*trips*",
+            "trips trips",
+            "do you know how to put the person in it",
+            "you can see the person in it",
+            "i can see the person in it"
+        ]
+        return hallucinationPhrases.contains(where: { normalizedText.contains($0) })
     }
 
     private static func formattedVideoDuration(for videoURL: URL) async -> String {

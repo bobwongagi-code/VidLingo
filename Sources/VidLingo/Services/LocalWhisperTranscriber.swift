@@ -80,6 +80,10 @@ enum LocalWhisperRunner {
 
     static func detectLanguageWithTranscript(audioFileURL: URL) async throws -> LanguageDetectionResult? {
         try await Task.detached(priority: .utility) {
+            if let detectedLanguage = try detectLanguageSynchronously(audioFileURL: audioFileURL) {
+                return LanguageDetectionResult(language: detectedLanguage, transcript: "")
+            }
+
             var best: (language: LanguageOption, text: String, score: Double)?
 
             for candidate in detectionCandidates() {
@@ -103,6 +107,63 @@ enum LocalWhisperRunner {
             guard let best, best.score > 0 else { return nil }
             return LanguageDetectionResult(language: best.language, transcript: best.text)
         }.value
+    }
+
+    private static func detectLanguageSynchronously(audioFileURL: URL) throws -> LanguageOption? {
+        guard let executableURL = LocalWhisperConfiguration.cliExecutableURL() else {
+            throw LocalWhisperError.executableNotFound
+        }
+        guard let modelURL = LocalWhisperConfiguration.modelURL() else {
+            throw LocalWhisperError.modelNotFound
+        }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VidLingo-Whisper-Detect-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let logURL = directory.appendingPathComponent("language.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let logHandle = try FileHandle(forWritingTo: logURL)
+        defer { try? logHandle.close() }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = [
+            "-m", modelURL.path,
+            "-f", audioFileURL.path,
+            "-l", "auto",
+            "-dl",
+            "-d", "18000"
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = logHandle
+        try process.run()
+        process.waitUntilExit()
+
+        let diagnosticText = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+        guard process.terminationStatus == 0,
+              let detection = parseWhisperLanguageDetection(from: diagnosticText),
+              detection.confidence >= 0.50 else {
+            return nil
+        }
+        return LanguageOption.whisperLanguageCode(detection.code)
+    }
+
+    private static func parseWhisperLanguageDetection(from text: String) -> (code: String, confidence: Double)? {
+        let pattern = #"auto-detected language:\s*([a-z]{2})\s*\(p\s*=\s*([0-9.]+)\)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = expression.firstMatch(in: text, options: [], range: range),
+              match.numberOfRanges >= 3,
+              let codeRange = Range(match.range(at: 1), in: text),
+              let confidenceRange = Range(match.range(at: 2), in: text),
+              let confidence = Double(text[confidenceRange]) else {
+            return nil
+        }
+        return (String(text[codeRange]).lowercased(), confidence)
     }
 
     private static func transcribeSynchronously(

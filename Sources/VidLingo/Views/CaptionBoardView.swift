@@ -78,7 +78,20 @@ private struct OfflineVideoImportPanel: View {
                 TextField(AppText.productContextPlaceholder, text: $session.offlineVideoProductContext)
                     .textFieldStyle(.roundedBorder)
                     .disabled(session.isOfflineVideoProcessing)
+
+                Button(AppText.clearProductContext) {
+                    session.clearProductContext()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(session.isOfflineVideoProcessing || session.offlineVideoProductContext.isEmpty)
+                .help(AppText.clearProductContext)
             }
+
+            Toggle(AppText.inferProductContext, isOn: $session.isProductContextInferenceEnabled)
+                .font(.caption.weight(.medium))
+                .disabled(session.isOfflineVideoProcessing)
+                .help(AppText.inferringProductContextHelp)
 
             if let videoURL = session.offlineVideoURL {
                 OfflineVideoPreviewCard(

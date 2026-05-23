@@ -15,7 +15,11 @@ enum AppText {
     static let importVideo = "导入视频"
     static let shortVideoOfflineTranslator = "短视频离线翻译器"
     static let productContext = "商品类型"
-    static let productContextPlaceholder = "清洁机、美妆、家居用品..."
+    static let productContextPlaceholder = "请输入商品类型"
+    static let inferProductContext = "商品类型为空时自动识别"
+    static let inferringProductContextHelp = "商品类型为空时，翻译前先根据口播原文自动识别；支持画面理解的模型会辅助参考视频截图。"
+    static let clearProductContext = "清空"
+    static let unknownProductContext = "未知商品"
     static let selectedVideo = "已导入视频"
     static let playPreview = "播放预览"
     static let hidePreview = "收起预览"
@@ -41,6 +45,10 @@ enum AppText {
     static let translationModelMissing = "翻译模型名不能为空。"
     static let translationEndpointInvalid = "Custom endpoint 不是有效 URL。"
     static let translationInvalidResponse = "模型服务返回了无效响应。"
+    static let noEffectiveSpeech = "未检测到有效口播"
+    static let noEffectiveSpeechDescription = "这段视频可能没有可转写的人声，或 Whisper 只生成了重复幻觉文本。请手动填写商品类型，或换有清晰口播的视频。"
+    static let visualSalesCopyNotice = "未检测到有效口播。以下内容不是口播翻译，而是根据视频画面推断生成的中文口播文案。"
+    static let visualFramesMissing = "没有可用于画面理解的视频截图。"
 
     static let savedTranscripts = "资料库"
     static let manageSavedTranscripts = "管理已保存记录"
@@ -89,8 +97,16 @@ enum AppText {
         "正在用本地 Whisper 转写 \(fileName)..."
     }
 
+    static func inferringProductContext(_ fileName: String) -> String {
+        "正在识别 \(fileName) 的商品类型..."
+    }
+
     static func offlineVideoTranslating(_ fileName: String, provider: String) -> String {
         "正在用 \(provider) 翻译 \(fileName)..."
+    }
+
+    static func generatingVisualSalesCopy(_ fileName: String) -> String {
+        "未检测到有效口播，正在根据 \(fileName) 的画面生成中文文案..."
     }
 
     static func offlineVideoComplete(_ fileName: String) -> String {
@@ -128,6 +144,10 @@ enum AppText {
     static func translationRequestFailed(provider: String, statusCode: Int, message: String?) -> String {
         let detail = message.map { ": \($0)" } ?? ""
         return "\(provider) 请求失败（\(statusCode)）\(detail)"
+    }
+
+    static func visualModelUnsupported(_ provider: String) -> String {
+        "\(provider) 当前模型不支持视频画面理解。"
     }
 
     static func translationAPIKeychainFailed(_ status: OSStatus) -> String {
