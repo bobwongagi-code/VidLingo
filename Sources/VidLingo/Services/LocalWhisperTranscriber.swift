@@ -2,20 +2,10 @@ import Foundation
 
 private enum LocalWhisperConfiguration {
     static func cliExecutableURL() -> URL? {
-        [
-            "/opt/homebrew/bin/whisper-cli",
-            "/usr/local/bin/whisper-cli",
-            "/opt/local/bin/whisper-cli",
-            "/opt/homebrew/bin/whisper-cpp",
-            "/usr/local/bin/whisper-cpp",
-            "/opt/local/bin/whisper-cpp",
-            "/opt/homebrew/bin/main",
-            "/usr/local/bin/main",
-            "/opt/local/bin/main"
-        ]
-        .map(URL.init(fileURLWithPath:))
-        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-        ?? executableURLFromPATH(named: ["whisper-cli", "whisper-cpp", "main"])
+        ExecutableFinder.findExecutable(
+            named: ["whisper-cli", "whisper-cpp", "main"],
+            commonDirectories: ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+        )
     }
 
     static func modelURL() -> URL? {
@@ -37,23 +27,6 @@ private enum LocalWhisperConfiguration {
             return false
         }
         return size.int64Value >= 500 * 1_024 * 1_024
-    }
-
-    private static func executableURLFromPATH(named executableNames: [String]) -> URL? {
-        let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
-
-        for directory in pathDirectories {
-            for executableName in executableNames {
-                let url = URL(fileURLWithPath: directory).appendingPathComponent(executableName)
-                if FileManager.default.isExecutableFile(atPath: url.path) {
-                    return url
-                }
-            }
-        }
-
-        return nil
     }
 }
 

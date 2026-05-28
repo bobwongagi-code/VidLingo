@@ -61,9 +61,6 @@ enum AppText {
     static let deleteAllSavedTranscripts = "删除全部"
     static let deleteAllSavedTranscriptsConfirmation = "确定删除全部保存记录？"
     static let noSavedTranscriptSelected = "未选择记录"
-    static let originalOnly = "原文"
-    static let originalAndTranslation = "原文 + 译文"
-    static let translationOnly = "译文"
 
     static func languageTitle(for id: String, fallback: String) -> String {
         switch id {

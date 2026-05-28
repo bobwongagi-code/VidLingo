@@ -294,8 +294,8 @@ private struct TranscriptResultView: View {
     var body: some View {
         if let line = session.lines.last {
             HStack(alignment: .top, spacing: 16) {
-                TranscriptPane(title: AppText.original, description: AppText.originalDescription, text: line.sourceDisplayText)
-                TranscriptPane(title: AppText.translation, description: AppText.translationDescription, text: line.translatedDisplayText)
+                TranscriptPane(title: AppText.original, description: AppText.originalDescription, text: line.sourceText)
+                TranscriptPane(title: AppText.translation, description: AppText.translationDescription, text: line.translatedText)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

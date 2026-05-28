@@ -51,7 +51,6 @@ final class TranslationSessionStore {
     var offlineVideoDurationText = ""
     var isOfflineVideoProcessing = false
     var isProductContextInferenceEnabled = true
-    var savedTranscriptContentMode = SavedTranscriptContentMode.originalAndTranslation
     var savedTranscripts: [SavedTranscript] = []
     var selectedSavedTranscriptID: String?
     var savedDraftSourceText = ""
@@ -85,14 +84,17 @@ final class TranslationSessionStore {
     func translateOfflineShortVideo(_ videoURL: URL) {
         guard !isOfflineVideoProcessing else { return }
 
-        let fallbackSource = sourceLanguage
-        let target = targetLanguage
-        let initialProductContext = offlineVideoProductContext
-        let provider = translationProvider
-        let modelName = translationModelName
-        let customBaseURL = customTranslationBaseURL
-        let shouldAutoDetectLanguage = isSourceAutoDetectionEnabled
-        let shouldInferProductContext = isProductContextInferenceEnabled
+        // 快照当前设置，避免 pipeline 运行中用户改动影响结果
+        let params = TranslationParams(
+            fallbackSource: sourceLanguage,
+            target: targetLanguage,
+            initialProductContext: offlineVideoProductContext,
+            provider: translationProvider,
+            modelName: translationModelName,
+            customBaseURL: customTranslationBaseURL,
+            shouldAutoDetectLanguage: isSourceAutoDetectionEnabled,
+            shouldInferProductContext: isProductContextInferenceEnabled
+        )
         let didAccess = videoURL.startAccessingSecurityScopedResource()
 
         offlineVideoURL = videoURL
@@ -106,12 +108,8 @@ final class TranslationSessionStore {
 
             var audioURL: URL?
             defer {
-                if let audioURL {
-                    OfflineVideoAudioExtractor.removeTemporaryAudio(audioURL)
-                }
-                if didAccess {
-                    videoURL.stopAccessingSecurityScopedResource()
-                }
+                if let audioURL { OfflineVideoAudioExtractor.removeTemporaryAudio(audioURL) }
+                if didAccess { videoURL.stopAccessingSecurityScopedResource() }
                 isOfflineVideoProcessing = false
             }
 
@@ -119,145 +117,177 @@ final class TranslationSessionStore {
                 audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(from: videoURL)
                 guard let audioURL else { return }
 
-                var transcriptSource = fallbackSource
-                if shouldAutoDetectLanguage {
-                    statusMessage = AppText.offlineVideoDetectingLanguage(videoURL.lastPathComponent)
-                    if let detection = try await LocalWhisperRunner.detectLanguageWithTranscript(audioFileURL: audioURL) {
-                        transcriptSource = detection.language
-                        sourceLanguage = detection.language
-                        statusMessage = AppText.offlineVideoDetectedLanguage(detection.language.localizedTitle)
-                    }
-                }
-
-                statusMessage = AppText.offlineVideoTranscribing(videoURL.lastPathComponent)
-                let rawTranscript = try await LocalWhisperRunner.transcribe(
-                    audioFileURL: audioURL,
-                    language: transcriptSource
+                let transcriptSource = try await pipelineDetectLanguage(
+                    audioURL: audioURL, videoURL: videoURL, params: params
                 )
-                let sourceText = organizeTranscript(rawTranscript, language: transcriptSource)
-                guard !sourceText.isEmpty else {
-                    throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
-                }
-                guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
-                    let visualSourceText = AppText.noEffectiveSpeech
-                    if LLMTranslationService.supportsProductContextFrames(provider: provider, modelName: modelName) {
-                        statusMessage = AppText.generatingVisualSalesCopy(videoURL.lastPathComponent)
-                        let frameJPEGData = await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
-                        if let visualCopy = try? await LLMTranslationService().generateVisualSalesCopy(
-                            fileName: videoURL.lastPathComponent,
-                            durationText: offlineVideoDurationText,
-                            productContext: initialProductContext,
-                            frameJPEGData: frameJPEGData,
-                            provider: provider,
-                            modelName: modelName,
-                            customBaseURL: customBaseURL
-                        ) {
-                            let translatedText = "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)"
-                            lines = [
-                                CaptionLine(
-                                    sourceText: visualSourceText,
-                                    translatedText: translatedText,
-                                    translatedSourceText: visualSourceText,
-                                    createdAt: Date(),
-                                    isFinal: true
-                                )
-                            ]
-                            saveOfflineVideoTranscript(sourceText: visualSourceText, translatedText: translatedText)
-                            statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
-                            return
-                        }
-                    }
+                let sourceText = try await pipelineTranscribe(
+                    audioURL: audioURL, videoURL: videoURL, language: transcriptSource
+                )
 
-                    lines = [
-                        CaptionLine(
-                            sourceText: visualSourceText,
-                            translatedText: AppText.noEffectiveSpeechDescription,
-                            translatedSourceText: visualSourceText,
-                            createdAt: Date(),
-                            isFinal: true
-                        )
-                    ]
-                    statusMessage = AppText.noEffectiveSpeech
+                // 无有效口播 → 尝试画面理解生成文案
+                guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
+                    pipelineHandleNoSpeech(videoURL: videoURL, params: params)
                     return
                 }
 
+                // 显示转写结果，进入翻译阶段
                 let createdAt = Date()
-                lines = [
-                    CaptionLine(
-                        sourceText: sourceText,
-                        translatedText: AppText.translating,
-                        translatedSourceText: sourceText,
-                        createdAt: createdAt,
-                        isFinal: true,
-                        revision: 1
-                    )
-                ]
+                lines = [CaptionLine(
+                    sourceText: sourceText, translatedText: AppText.translating,
+                    translatedSourceText: sourceText, createdAt: createdAt, isFinal: true, revision: 1
+                )]
 
-                var productContext = initialProductContext.trimmingCharacters(in: .whitespacesAndNewlines)
-                if shouldInferProductContext && productContext.isEmpty {
-                    statusMessage = AppText.inferringProductContext(videoURL.lastPathComponent)
-                    let frameJPEGData = if LLMTranslationService.supportsProductContextFrames(
-                        provider: provider,
-                        modelName: modelName
-                    ) {
-                        await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
-                    } else {
-                        [Data]()
-                    }
-                    if let inferredContext = try? await LLMTranslationService().inferProductContext(
-                        from: sourceText,
-                        fileName: videoURL.lastPathComponent,
-                        frameJPEGData: frameJPEGData,
-                        source: transcriptSource,
-                        provider: provider,
-                        modelName: modelName,
-                        customBaseURL: customBaseURL
-                    ) {
-                        if !inferredContext.isEmpty && inferredContext != AppText.unknownProductContext {
-                            productContext = inferredContext
-                            offlineVideoProductContext = inferredContext
-                        }
-                    }
-                }
-
-                statusMessage = AppText.offlineVideoTranslating(videoURL.lastPathComponent, provider: provider.title)
-                let translatedText = try await LLMTranslationService().translateShortVideoTranscript(
-                    sourceText,
-                    source: transcriptSource,
-                    target: target,
-                    productContext: productContext,
-                    provider: provider,
-                    modelName: modelName,
-                    customBaseURL: customBaseURL
+                let productContext = await pipelineInferProductContext(
+                    sourceText: sourceText, videoURL: videoURL, language: transcriptSource, params: params
                 )
 
-                lines = [
-                    CaptionLine(
-                        sourceText: sourceText,
-                        translatedText: translatedText,
-                        translatedSourceText: sourceText,
-                        createdAt: createdAt,
-                        isFinal: true,
-                        revision: 2
-                    )
-                ]
+                let translatedText = try await pipelineTranslate(
+                    sourceText: sourceText, language: transcriptSource,
+                    productContext: productContext, videoURL: videoURL, params: params
+                )
+
+                lines = [CaptionLine(
+                    sourceText: sourceText, translatedText: translatedText,
+                    translatedSourceText: sourceText, createdAt: createdAt, isFinal: true, revision: 2
+                )]
                 saveOfflineVideoTranscript(sourceText: sourceText, translatedText: translatedText)
                 statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
             } catch {
                 statusMessage = AppText.offlineVideoFailed(error.localizedDescription)
                 if lines.isEmpty {
-                    lines = [
-                        CaptionLine(
-                            sourceText: videoURL.lastPathComponent,
-                            translatedText: statusMessage,
-                            translatedSourceText: videoURL.lastPathComponent,
-                            createdAt: Date(),
-                            isFinal: true
-                        )
-                    ]
+                    lines = [CaptionLine(
+                        sourceText: videoURL.lastPathComponent, translatedText: statusMessage,
+                        translatedSourceText: videoURL.lastPathComponent, createdAt: Date(), isFinal: true
+                    )]
                 }
             }
         }
+    }
+
+    // MARK: - Pipeline 参数快照
+
+    private struct TranslationParams {
+        let fallbackSource: LanguageOption
+        let target: LanguageOption
+        let initialProductContext: String
+        let provider: TranslationProviderID
+        let modelName: String
+        let customBaseURL: String
+        let shouldAutoDetectLanguage: Bool
+        let shouldInferProductContext: Bool
+    }
+
+    // MARK: - Pipeline 步骤
+
+    /// 语言检测：如果开启自动检测，用 Whisper 检测前 18 秒音频的语言
+    private func pipelineDetectLanguage(
+        audioURL: URL, videoURL: URL, params: TranslationParams
+    ) async throws -> LanguageOption {
+        guard params.shouldAutoDetectLanguage else { return params.fallbackSource }
+
+        statusMessage = AppText.offlineVideoDetectingLanguage(videoURL.lastPathComponent)
+        if let detection = try await LocalWhisperRunner.detectLanguageWithTranscript(audioFileURL: audioURL) {
+            sourceLanguage = detection.language
+            statusMessage = AppText.offlineVideoDetectedLanguage(detection.language.localizedTitle)
+            return detection.language
+        }
+        return params.fallbackSource
+    }
+
+    /// 转写：用 Whisper 把音频转成文字
+    private func pipelineTranscribe(
+        audioURL: URL, videoURL: URL, language: LanguageOption
+    ) async throws -> String {
+        statusMessage = AppText.offlineVideoTranscribing(videoURL.lastPathComponent)
+        let rawTranscript = try await LocalWhisperRunner.transcribe(audioFileURL: audioURL, language: language)
+        let sourceText = organizeTranscript(rawTranscript, language: language)
+        guard !sourceText.isEmpty else {
+            throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
+        }
+        return sourceText
+    }
+
+    /// 无口播兜底：尝试用视觉模型生成文案，否则显示提示
+    private func pipelineHandleNoSpeech(videoURL: URL, params: TranslationParams) {
+        let visualSourceText = AppText.noEffectiveSpeech
+
+        Task { @MainActor in
+            if LLMTranslationService.supportsProductContextFrames(provider: params.provider, modelName: params.modelName) {
+                statusMessage = AppText.generatingVisualSalesCopy(videoURL.lastPathComponent)
+                let frameJPEGData = await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
+                if let visualCopy = try? await LLMTranslationService().generateVisualSalesCopy(
+                    fileName: videoURL.lastPathComponent,
+                    durationText: offlineVideoDurationText,
+                    productContext: params.initialProductContext,
+                    frameJPEGData: frameJPEGData,
+                    provider: params.provider,
+                    modelName: params.modelName,
+                    customBaseURL: params.customBaseURL
+                ) {
+                    let translatedText = "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)"
+                    lines = [CaptionLine(
+                        sourceText: visualSourceText, translatedText: translatedText,
+                        translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
+                    )]
+                    saveOfflineVideoTranscript(sourceText: visualSourceText, translatedText: translatedText)
+                    statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
+                    return
+                }
+            }
+
+            lines = [CaptionLine(
+                sourceText: visualSourceText, translatedText: AppText.noEffectiveSpeechDescription,
+                translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
+            )]
+            statusMessage = AppText.noEffectiveSpeech
+        }
+    }
+
+    /// 商品类型推断：根据口播文本和视频帧推断商品类型
+    private func pipelineInferProductContext(
+        sourceText: String, videoURL: URL, language: LanguageOption, params: TranslationParams
+    ) async -> String {
+        var productContext = params.initialProductContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard params.shouldInferProductContext && productContext.isEmpty else { return productContext }
+
+        statusMessage = AppText.inferringProductContext(videoURL.lastPathComponent)
+        let frameJPEGData = LLMTranslationService.supportsProductContextFrames(
+            provider: params.provider, modelName: params.modelName
+        )
+            ? await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
+            : []
+
+        if let inferredContext = try? await LLMTranslationService().inferProductContext(
+            from: sourceText,
+            fileName: videoURL.lastPathComponent,
+            frameJPEGData: frameJPEGData,
+            source: language,
+            provider: params.provider,
+            modelName: params.modelName,
+            customBaseURL: params.customBaseURL
+        ), !inferredContext.isEmpty, inferredContext != AppText.unknownProductContext {
+            productContext = inferredContext
+            offlineVideoProductContext = inferredContext
+        }
+
+        return productContext
+    }
+
+    /// 翻译：用 LLM 翻译转写文本
+    private func pipelineTranslate(
+        sourceText: String, language: LanguageOption,
+        productContext: String, videoURL: URL, params: TranslationParams
+    ) async throws -> String {
+        statusMessage = AppText.offlineVideoTranslating(videoURL.lastPathComponent, provider: params.provider.title)
+        return try await LLMTranslationService().translateShortVideoTranscript(
+            sourceText,
+            source: language,
+            target: params.target,
+            productContext: productContext,
+            provider: params.provider,
+            modelName: params.modelName,
+            customBaseURL: params.customBaseURL
+        )
     }
 
     func clearProductContext() {

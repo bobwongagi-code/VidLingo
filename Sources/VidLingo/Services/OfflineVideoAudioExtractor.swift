@@ -8,7 +8,7 @@ enum OfflineVideoAudioExtractor {
     }
 
     private static func extractSpeechAudioSynchronously(from videoURL: URL) throws -> URL {
-        guard let ffmpegURL = executableURL(named: "ffmpeg") else {
+        guard let ffmpegURL = ExecutableFinder.findExecutable(named: ["ffmpeg"]) else {
             throw OfflineVideoTranslationError.ffmpegNotFound
         }
 
@@ -53,32 +53,6 @@ enum OfflineVideoAudioExtractor {
         try? FileManager.default.removeItem(at: audioURL.deletingLastPathComponent())
     }
 
-    private static func executableURL(named executable: String) -> URL? {
-        [
-            "/opt/homebrew/bin/\(executable)",
-            "/usr/local/bin/\(executable)",
-            "/opt/local/bin/\(executable)",
-            "/usr/bin/\(executable)"
-        ]
-        .map(URL.init(fileURLWithPath:))
-        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-        ?? executableURLFromPATH(named: executable)
-    }
-
-    private static func executableURLFromPATH(named executable: String) -> URL? {
-        let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
-
-        for directory in pathDirectories {
-            let url = URL(fileURLWithPath: directory).appendingPathComponent(executable)
-            if FileManager.default.isExecutableFile(atPath: url.path) {
-                return url
-            }
-        }
-
-        return nil
-    }
 }
 
 enum OfflineVideoTranslationError: LocalizedError {

@@ -5,21 +5,15 @@ actor LLMTranslationService {
         productContextVisionModel(provider: provider, currentModel: modelName) != nil
     }
 
-    func inferProductContext(
-        from text: String,
-        fileName: String,
-        frameJPEGData: [Data],
-        source: LanguageOption,
+    // MARK: - 公共校验和请求构建
+
+    private func preparedRequest(
         provider: TranslationProviderID,
         modelName: String,
         customBaseURL: String
-    ) async throws -> String {
-        guard !text.isEmpty else { return "" }
-
+    ) throws -> (request: URLRequest, model: String) {
         let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !model.isEmpty else {
-            throw LLMTranslationError.missingModel
-        }
+        guard !model.isEmpty else { throw LLMTranslationError.missingModel }
 
         guard let apiKey = try TranslationAPIKeyStore.readAPIKey(for: provider), !apiKey.isEmpty else {
             throw LLMTranslationError.missingAPIKey(provider.title)
@@ -35,44 +29,42 @@ actor LLMTranslationService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        return (request, model)
+    }
 
+    // MARK: - 公开 API
+
+    func inferProductContext(
+        from text: String,
+        fileName: String,
+        frameJPEGData: [Data],
+        source: LanguageOption,
+        provider: TranslationProviderID,
+        modelName: String,
+        customBaseURL: String
+    ) async throws -> String {
+        guard !text.isEmpty else { return "" }
+
+        var (request, model) = try preparedRequest(provider: provider, modelName: modelName, customBaseURL: customBaseURL)
         let prompt = productContextPrompt(text, fileName: fileName, source: source)
+
+        // 优先尝试视觉模型，失败则 fallback 到纯文本
         let visionModel = Self.productContextVisionModel(provider: provider, currentModel: model)
-        let shouldUseFrames = visionModel != nil && !frameJPEGData.isEmpty
-        if shouldUseFrames {
+        if let visionModel, !frameJPEGData.isEmpty {
             request.httpBody = try JSONEncoder().encode(
-                visionProductContextRequest(
-                    prompt: prompt,
-                    frameJPEGData: frameJPEGData,
-                    model: visionModel ?? model
-                )
+                visionProductContextRequest(prompt: prompt, frameJPEGData: frameJPEGData, model: visionModel)
             )
             do {
-                let outputText = try await sendChatCompletionRequest(request, provider: provider)
-                return sanitizeProductContext(outputText)
-            } catch LLMTranslationError.requestFailed {
-                request.httpBody = try JSONEncoder().encode(
-                    productContextRequest(
-                        prompt: prompt,
-                        source: source,
-                        provider: provider,
-                        model: model
-                    )
-                )
+                return sanitizeProductContext(try await sendChatCompletionRequest(request, provider: provider))
+            } catch is LLMTranslationError {
+                // vision 失败，继续用纯文本
             }
-        } else {
-            request.httpBody = try JSONEncoder().encode(
-                productContextRequest(
-                    prompt: prompt,
-                    source: source,
-                    provider: provider,
-                    model: model
-                )
-            )
         }
 
-        let outputText = try await sendChatCompletionRequest(request, provider: provider)
-        return sanitizeProductContext(outputText)
+        request.httpBody = try JSONEncoder().encode(
+            productContextRequest(prompt: prompt, source: source, provider: provider, model: model)
+        )
+        return sanitizeProductContext(try await sendChatCompletionRequest(request, provider: provider))
     }
 
     func translateShortVideoTranscript(
@@ -86,37 +78,10 @@ actor LLMTranslationService {
     ) async throws -> String {
         guard !text.isEmpty else { return text }
 
-        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !model.isEmpty else {
-            throw LLMTranslationError.missingModel
-        }
-
-        guard let apiKey = try TranslationAPIKeyStore.readAPIKey(for: provider), !apiKey.isEmpty else {
-            throw LLMTranslationError.missingAPIKey(provider.title)
-        }
-
-        let endpointText = provider == .custom ? customBaseURL : provider.defaultBaseURL
-        guard let endpoint = URL(string: endpointText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              endpoint.scheme?.hasPrefix("http") == true else {
-            throw LLMTranslationError.invalidEndpoint
-        }
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-
+        var (request, model) = try preparedRequest(provider: provider, modelName: modelName, customBaseURL: customBaseURL)
         request.httpBody = try JSONEncoder().encode(
-            chatCompletionRequest(
-                text,
-                source: source,
-                target: target,
-                productContext: productContext,
-                provider: provider,
-                model: model
-            )
+            chatCompletionRequest(text, source: source, target: target, productContext: productContext, provider: provider, model: model)
         )
-
         return try await sendChatCompletionRequest(request, provider: provider)
     }
 
@@ -129,52 +94,23 @@ actor LLMTranslationService {
         modelName: String,
         customBaseURL: String
     ) async throws -> String {
-        guard !frameJPEGData.isEmpty else {
-            throw LLMTranslationError.visualFramesMissing
-        }
+        guard !frameJPEGData.isEmpty else { throw LLMTranslationError.visualFramesMissing }
 
-        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !model.isEmpty else {
-            throw LLMTranslationError.missingModel
-        }
-
+        var (request, model) = try preparedRequest(provider: provider, modelName: modelName, customBaseURL: customBaseURL)
         guard let visionModel = Self.productContextVisionModel(provider: provider, currentModel: model) else {
             throw LLMTranslationError.visualModelUnsupported(provider.title)
         }
 
-        guard let apiKey = try TranslationAPIKeyStore.readAPIKey(for: provider), !apiKey.isEmpty else {
-            throw LLMTranslationError.missingAPIKey(provider.title)
-        }
-
-        let endpointText = provider == .custom ? customBaseURL : provider.defaultBaseURL
-        guard let endpoint = URL(string: endpointText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              endpoint.scheme?.hasPrefix("http") == true else {
-            throw LLMTranslationError.invalidEndpoint
-        }
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-
+        // 第一轮：视频画面分析
         request.httpBody = try JSONEncoder().encode(
-            visionVideoAnalysisRequest(
-                prompt: visualVideoAnalysisPrompt(fileName: fileName),
-                frameJPEGData: frameJPEGData,
-                model: visionModel
-            )
+            visionVideoAnalysisRequest(prompt: visualVideoAnalysisPrompt(fileName: fileName), frameJPEGData: frameJPEGData, model: visionModel)
         )
-        let analysisText = try await sendChatCompletionRequest(request, provider: provider)
-        let analysis = try parseVisualVideoAnalysis(from: analysisText)
+        let analysis = try parseVisualVideoAnalysis(from: try await sendChatCompletionRequest(request, provider: provider))
 
+        // 第二轮：生成口播文案
         request.httpBody = try JSONEncoder().encode(
             visionSalesCopyRequest(
-                prompt: visualSalesCopyPrompt(
-                    fileName: fileName,
-                    durationText: durationText,
-                    productContext: productContext,
-                    analysis: analysis
-                ),
+                prompt: visualSalesCopyPrompt(fileName: fileName, durationText: durationText, productContext: productContext, analysis: analysis),
                 frameJPEGData: frameJPEGData,
                 model: visionModel
             )
