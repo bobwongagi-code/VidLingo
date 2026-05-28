@@ -47,14 +47,7 @@ enum OfflineVideoFrameExtractor {
     }
 
     private static func cgImage(from generator: AVAssetImageGenerator, at time: CMTime) async -> CGImage? {
-        await withCheckedContinuation { continuation in
-            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
-                guard result == .succeeded, let cgImage else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: cgImage)
-            }
-        }
+        guard let result = try? await generator.image(at: time) else { return nil }
+        return result.image
     }
 }

@@ -250,15 +250,10 @@ private struct OfflineVideoPreviewCard: View {
             generator.maximumSize = CGSize(width: 360, height: 220)
             let requestedTime = CMTime(seconds: 0.35, preferredTimescale: 600)
 
-            return await withCheckedContinuation { continuation in
-                generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: requestedTime)]) { _, cgImage, _, result, _ in
-                    guard result == .succeeded, let cgImage else {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-                    continuation.resume(returning: NSImage(cgImage: cgImage, size: .zero))
-                }
+            guard let (cgImage, _) = try? await generator.image(at: requestedTime) else {
+                return nil
             }
+            return NSImage(cgImage: cgImage, size: .zero)
         }.value
     }
 }
