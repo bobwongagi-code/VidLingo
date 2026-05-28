@@ -43,7 +43,7 @@ DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flas
 OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
 Qwen / 千问     https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  qwen-plus
 Qwen-MT        same Qwen endpoint, model names like qwen-mt-flash or qwen-mt-plus
-Claude         https://api.anthropic.com/v1/chat/completions    claude-sonnet-4-5-20250929
+Claude         https://openrouter.ai/api/v1/chat/completions    claude-sonnet-4-5-20250929
 Custom         user-provided OpenAI-compatible chat completions URL
 ```
 
