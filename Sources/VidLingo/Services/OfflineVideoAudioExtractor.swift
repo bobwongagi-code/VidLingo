@@ -18,19 +18,19 @@ enum OfflineVideoAudioExtractor {
 
         let audioURL = directory.appendingPathComponent("speech.wav")
         let logURL = directory.appendingPathComponent("ffmpeg.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
         let process = Process()
         process.executableURL = ffmpegURL
         process.arguments = [
             "-hide_banner",
             "-loglevel", "error",
             "-y",
-            "-i", videoURL.path,
+            "-i", videoURL.path(percentEncoded: false),
             "-vn",
             "-ar", "16000",
             "-ac", "1",
             "-sample_fmt", "s16",
-            audioURL.path
+            audioURL.path(percentEncoded: false)
         ]
 
         process.standardOutput = FileHandle.nullDevice

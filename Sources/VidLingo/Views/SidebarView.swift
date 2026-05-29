@@ -156,3 +156,4 @@ struct SidebarView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
+

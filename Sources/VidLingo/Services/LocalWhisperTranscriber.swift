@@ -1,32 +1,84 @@
 import Foundation
 
-private enum LocalWhisperConfiguration {
+enum LocalWhisperConfiguration {
     static func cliExecutableURL() -> URL? {
         ExecutableFinder.findExecutable(
             named: ["whisper-cli", "whisper-cpp", "main"],
-            commonDirectories: ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+            commonDirectories: [
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/opt/local/bin",
+                "/opt/homebrew/Cellar/whisper-cpp/1.8.4/bin"
+            ]
         )
     }
 
-    static func modelURL() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let candidates = [
-            home.appendingPathComponent("Library/Application Support/VidLingo/Models/ggml-large-v3-turbo-q5_0.bin"),
-            home.appendingPathComponent("Library/Application Support/VidLingo/Models/ggml-large-v3-turbo.bin"),
-            home.appendingPathComponent("Library/Application Support/AirTranslate/Models/ggml-large-v3-turbo-q5_0.bin"),
-            home.appendingPathComponent("Library/Application Support/AirTranslate/Models/ggml-large-v3-turbo.bin"),
-            home.appendingPathComponent(".cache/whisper/ggml-large-v3-turbo-q5_0.bin"),
-            home.appendingPathComponent(".cache/whisper/ggml-large-v3-turbo.bin"),
+    // 所有候选模型路径，按优先级排序
+    static var modelCandidatePaths: [URL] {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+
+        // Application Support 目录（优先用 FileManager API，避免路径拼写问题）
+        let appSupportURL = fileManager.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? home.appendingPathComponent("Library/Application Support")
+
+        // 常用模型文件名，按能力从高到低
+        let modelNames = [
+            "ggml-large-v3-turbo-q5_0.bin",
+            "ggml-large-v3-turbo-q8_0.bin",
+            "ggml-large-v3-turbo.bin",
+            "ggml-large-v3-q5_0.bin",
+            "ggml-large-v3.bin",
+            "ggml-large-v2-q5_0.bin",
+            "ggml-large-v2.bin",
+            "ggml-medium-q5_0.bin",
+            "ggml-medium.bin",
+            "ggml-small-q5_1.bin",
+            "ggml-small.bin",
+            "ggml-base.bin",
+            "ggml-tiny.bin",
         ]
-        return candidates.first { isUsableModel(at: $0) }
+
+        // 模型目录搜索顺序
+        let modelDirs: [URL] = [
+            appSupportURL.appendingPathComponent("VidLingo/Models"),
+            appSupportURL.appendingPathComponent("AirTranslate/Models"),
+            appSupportURL.appendingPathComponent("whisper/Models"),
+            home.appendingPathComponent(".cache/whisper"),
+            URL(fileURLWithPath: "/opt/homebrew/share/whisper.cpp"),
+            URL(fileURLWithPath: "/usr/local/share/whisper.cpp"),
+        ]
+
+        var candidates: [URL] = []
+        for dir in modelDirs {
+            for name in modelNames {
+                candidates.append(dir.appendingPathComponent(name))
+            }
+        }
+        return candidates
+    }
+
+    static func modelURL() -> URL? {
+        modelCandidatePaths.first { isUsableModel(at: $0) }
+    }
+
+    // 用于报错时显示给用户的首选放置路径
+    static var preferredModelDirectory: URL {
+        (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support"))
+            .appendingPathComponent("VidLingo/Models")
     }
 
     private static func isUsableModel(at url: URL) -> Bool {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+        guard let attributes = try? FileManager.default.attributesOfItem(
+            atPath: url.path(percentEncoded: false)
+        ),
               let size = attributes[.size] as? NSNumber else {
             return false
         }
-        return size.int64Value >= 500 * 1_024 * 1_024
+        // 放宽到 30 MB：tiny 模型约 75 MB，base 约 142 MB，最小的量化模型也超过 30 MB
+        return size.int64Value >= 30 * 1_024 * 1_024
     }
 }
 
@@ -96,15 +148,15 @@ enum LocalWhisperRunner {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let logURL = directory.appendingPathComponent("language.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
         let logHandle = try FileHandle(forWritingTo: logURL)
         defer { try? logHandle.close() }
 
         let process = Process()
         process.executableURL = executableURL
         process.arguments = [
-            "-m", modelURL.path,
-            "-f", audioFileURL.path,
+            "-m", modelURL.path(percentEncoded: false),
+            "-f", audioFileURL.path(percentEncoded: false),
             "-l", "auto",
             "-dl",
             "-d", "18000"
@@ -154,18 +206,18 @@ enum LocalWhisperRunner {
 
         let outputStem = directory.appendingPathComponent("transcript")
         let logURL = directory.appendingPathComponent("whisper.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
         let logHandle = try FileHandle(forWritingTo: logURL)
         defer { try? logHandle.close() }
 
         let process = Process()
         process.executableURL = executableURL
         var arguments = [
-            "-m", modelURL.path,
-            "-f", audioFileURL.path,
+            "-m", modelURL.path(percentEncoded: false),
+            "-f", audioFileURL.path(percentEncoded: false),
             "-l", languageCode,
             "-otxt",
-            "-of", outputStem.path,
+            "-of", outputStem.path(percentEncoded: false),
             "-nt",
             "-np"
         ]
@@ -184,7 +236,7 @@ enum LocalWhisperRunner {
         }
 
         let transcriptURL = outputStem.appendingPathExtension("txt")
-        guard FileManager.default.fileExists(atPath: transcriptURL.path) else {
+        guard FileManager.default.fileExists(atPath: transcriptURL.path(percentEncoded: false)) else {
             throw LocalWhisperError.transcriptionFailed(diagnosticText.isEmpty ? "whisper-cli did not create a transcript file." : diagnosticText)
         }
         let text = try String(contentsOf: transcriptURL, encoding: .utf8)
@@ -276,11 +328,12 @@ enum LocalWhisperError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .executableNotFound:
-            "Local Whisper is not installed. Install whisper.cpp so whisper-cli, whisper-cpp, or main is available."
+            return "未找到 whisper-cli。请用 Homebrew 安装：brew install whisper-cpp"
         case .modelNotFound:
-            "Local Whisper model not found. Put ggml-large-v3-turbo-q5_0.bin in ~/Library/Application Support/VidLingo/Models."
+            let dir = LocalWhisperConfiguration.preferredModelDirectory.path(percentEncoded: false)
+            return "未找到 Whisper 模型文件。请将 ggml-*.bin 模型文件放到：\(dir)"
         case let .transcriptionFailed(message):
-            "Local Whisper transcription failed: \(message)"
+            return "Whisper 转写失败：\(message)"
         }
     }
 }
