@@ -308,11 +308,14 @@ actor LLMTranslationService {
         }
 
         let context = productContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        let guardrails = translationGuardrails(for: source)
         let userPrompt = """
         源语言：\(source.localizedTitle)
         目标语言：\(target.localizedTitle)
         视频类型：TikTok / 短视频带货口播
         商品类型：\(context.isEmpty ? "未知商品，请根据原文谨慎判断" : context)
+
+        \(guardrails)
 
         请把下面的 Whisper 转写原文翻译成自然、易懂的简体中文。
 
@@ -522,8 +525,38 @@ actor LLMTranslationService {
         4. Translate filler words like lah, kan, tau, and haa into natural Chinese equivalents like 嘛, 对吧, 哦, and 哈.
         5. If an opening noun contradicts the product being demonstrated, translate it as a neutral product reference like 就这款 instead of its literal meaning.
         6. Translate the call-to-action sentence at the end with clear purchase intent.
+        7. Do not add product specs, ratings, effects, accessories, discounts, or urgency words that are not present in the transcript.
+        8. If the ASR text is unclear, keep the translation broad and natural instead of inventing details.
         \(productLine)
         """
+    }
+
+    private func translationGuardrails(for source: LanguageOption) -> String {
+        switch source.id {
+        case "th-TH":
+            """
+            泰语专项要求：
+            - 当前原文来自 Whisper 泰语转写，可能有错词、粘连或漏字。先保留原文能确认的事实信息。
+            - 可以把明确的使用场景、感受和语气，转成自然的中文带货表达，让译文更顺、更有口播感。
+            - 允许强化语气、节奏和感受，例如“更安心”“更省心”“用起来方便”“真的舒服”，但不能新增硬事实。
+            - 不要补充原文没有明确说出的品牌、型号、价格、折扣、库存、IP 等级、续航、材质、成分、功效、参数。
+            - 如果 ASR 文字不清楚，只做宽泛处理，不要写成确定事实。
+            - 输出只保留译文正文，不要翻译说明、判断依据、标题或括号注释。
+            """
+        case "ms-MY":
+            """
+            马来语专项要求：
+            - 保留马来语带货口语节奏，但不要添加原文没有的参数、功效、配件、折扣或库存。
+            - 对明显 ASR 错词可以按上下文纠正；证据不足时用宽泛译法，不要过度补写。
+            - 输出只保留译文正文，不要翻译说明、判断依据、标题或括号注释。
+            """
+        default:
+            """
+            忠实翻译要求：
+            - 不添加原文没有的品牌、参数、功效、价格、折扣、库存或时间限定词。
+            - 输出只保留译文正文，不要翻译说明、判断依据、标题或括号注释。
+            """
+        }
     }
 
     private var qwenMTTerms: [TranslationTerm] {
