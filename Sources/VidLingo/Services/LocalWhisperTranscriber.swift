@@ -1,4 +1,6 @@
+import AVFoundation
 import Foundation
+import VidLingoCore
 
 enum LocalWhisperConfiguration {
     static func cliExecutableURL() -> URL? {
@@ -13,35 +15,39 @@ enum LocalWhisperConfiguration {
         )
     }
 
-    // 所有候选模型路径，按优先级排序
-    static var modelCandidatePaths: [URL] {
+    // 通用模型文件名，按能力从高到低
+    private static let generalModelNames = [
+        "ggml-large-v3-turbo-q5_0.bin",
+        "ggml-large-v3-turbo-q8_0.bin",
+        "ggml-large-v3-turbo.bin",
+        "ggml-large-v3-q5_0.bin",
+        "ggml-large-v3.bin",
+        "ggml-large-v2-q5_0.bin",
+        "ggml-large-v2.bin",
+        "ggml-medium-q5_0.bin",
+        "ggml-medium.bin",
+        "ggml-small-q5_1.bin",
+        "ggml-small.bin",
+        "ggml-base.bin",
+        "ggml-tiny.bin",
+    ]
+
+    // 泰语专精微调模型（biodatlab/whisper-th-large-v3-combined），仅泰语用，
+    // 因为它跑其他语言会更差。找不到时回退到通用模型。
+    private static let thaiModelNames = [
+        "ggml-th-large-v3-q5_0.bin",
+        "ggml-th-large-v3-combined-q5_0.bin",
+        "ggml-th-large-v3.bin",
+    ]
+
+    // 模型目录搜索顺序
+    private static var modelDirs: [URL] {
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser
-
-        // Application Support 目录（优先用 FileManager API，避免路径拼写问题）
         let appSupportURL = fileManager.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? home.appendingPathComponent("Library/Application Support")
-
-        // 常用模型文件名，按能力从高到低
-        let modelNames = [
-            "ggml-large-v3-turbo-q5_0.bin",
-            "ggml-large-v3-turbo-q8_0.bin",
-            "ggml-large-v3-turbo.bin",
-            "ggml-large-v3-q5_0.bin",
-            "ggml-large-v3.bin",
-            "ggml-large-v2-q5_0.bin",
-            "ggml-large-v2.bin",
-            "ggml-medium-q5_0.bin",
-            "ggml-medium.bin",
-            "ggml-small-q5_1.bin",
-            "ggml-small.bin",
-            "ggml-base.bin",
-            "ggml-tiny.bin",
-        ]
-
-        // 模型目录搜索顺序
-        let modelDirs: [URL] = [
+        return [
             appSupportURL.appendingPathComponent("VidLingo/Models"),
             appSupportURL.appendingPathComponent("AirTranslate/Models"),
             appSupportURL.appendingPathComponent("whisper/Models"),
@@ -49,18 +55,31 @@ enum LocalWhisperConfiguration {
             URL(fileURLWithPath: "/opt/homebrew/share/whisper.cpp"),
             URL(fileURLWithPath: "/usr/local/share/whisper.cpp"),
         ]
+    }
 
+    private static func candidatePaths(for names: [String]) -> [URL] {
         var candidates: [URL] = []
         for dir in modelDirs {
-            for name in modelNames {
+            for name in names {
                 candidates.append(dir.appendingPathComponent(name))
             }
         }
         return candidates
     }
 
-    static func modelURL() -> URL? {
-        modelCandidatePaths.first { isUsableModel(at: $0) }
+    // 所有通用候选路径（启动检查模型是否存在时用）
+    static var modelCandidatePaths: [URL] {
+        candidatePaths(for: generalModelNames)
+    }
+
+    /// 按语言选模型：泰语优先用专精微调，其他语言（含语言检测 nil）用通用模型；
+    /// 泰语微调缺失时回退到通用模型。
+    static func modelURL(for languageCode: String? = nil) -> URL? {
+        if languageCode == "th",
+           let thaiModel = candidatePaths(for: thaiModelNames).first(where: isUsableModel) {
+            return thaiModel
+        }
+        return candidatePaths(for: generalModelNames).first(where: isUsableModel)
     }
 
     // 用于报错时显示给用户的首选放置路径
@@ -95,10 +114,25 @@ enum LocalWhisperRunner {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
 
+            if language.id == "th-TH",
+               let duration = await audioDurationSeconds(audioFileURL: audioFileURL),
+               duration > 22 {
+                return try transcribeSegmentedSynchronously(
+                    audioFileURL: audioFileURL,
+                    languageCode: "th",
+                    duration: duration,
+                    temporaryDirectory: directory
+                )
+            }
+
+            // 短视频（含 ≤22s 的泰语）走单次转写，泰语同样传入中性 initial prompt 锚定泰文，
+            // 避免开头漂移成英语幻觉（与分段路径保持一致）
+            let languageCode = whisperLanguageCode(for: language)
             return try transcribeSynchronously(
                 audioFileURL: audioFileURL,
-                languageCode: whisperLanguageCode(for: language),
-                temporaryDirectory: directory
+                languageCode: languageCode,
+                temporaryDirectory: directory,
+                initialPrompt: initialPrompt(for: languageCode)
             ).text
         }.value
     }
@@ -195,12 +229,15 @@ enum LocalWhisperRunner {
         audioFileURL: URL,
         languageCode: String,
         temporaryDirectory directory: URL,
-        durationSeconds: Int? = nil
+        durationSeconds: Int? = nil,
+        offsetMilliseconds: Int? = nil,
+        initialPrompt: String? = nil
     ) throws -> (text: String, diagnostics: String) {
         guard let executableURL = LocalWhisperConfiguration.cliExecutableURL() else {
             throw LocalWhisperError.executableNotFound
         }
-        guard let modelURL = LocalWhisperConfiguration.modelURL() else {
+        // 按语言选模型：泰语用专精微调，其他用通用模型
+        guard let modelURL = LocalWhisperConfiguration.modelURL(for: languageCode) else {
             throw LocalWhisperError.modelNotFound
         }
 
@@ -219,10 +256,18 @@ enum LocalWhisperRunner {
             "-otxt",
             "-of", outputStem.path(percentEncoded: false),
             "-nt",
-            "-np"
+            "-np",
+            // 不携带上文，避免泰语等语种陷入重复幻觉循环
+            "-mc", "0"
         ]
+        if let offsetMilliseconds {
+            arguments.append(contentsOf: ["-ot", String(offsetMilliseconds)])
+        }
         if let durationSeconds {
             arguments.append(contentsOf: ["-d", String(durationSeconds * 1_000)])
+        }
+        if let initialPrompt, !initialPrompt.isEmpty {
+            arguments.append(contentsOf: ["--prompt", initialPrompt])
         }
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
@@ -241,6 +286,79 @@ enum LocalWhisperRunner {
         }
         let text = try String(contentsOf: transcriptURL, encoding: .utf8)
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), diagnosticText)
+    }
+
+    private static func transcribeSegmentedSynchronously(
+        audioFileURL: URL,
+        languageCode: String,
+        duration: Double,
+        temporaryDirectory directory: URL
+    ) throws -> String {
+        let chunkSeconds = 15.0
+        let overlapSeconds = 2.0
+        let stepSeconds = chunkSeconds - overlapSeconds
+        var offset = 0.0
+        var segmentTexts: [String] = []
+
+        while offset < duration {
+            let segmentDuration = min(chunkSeconds, duration - offset)
+            let result = try transcribeSynchronously(
+                audioFileURL: audioFileURL,
+                languageCode: languageCode,
+                temporaryDirectory: directory,
+                durationSeconds: Int(ceil(segmentDuration)),
+                offsetMilliseconds: Int((offset * 1_000).rounded()),
+                initialPrompt: initialPrompt(for: languageCode)
+            )
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                segmentTexts.append(text)
+            }
+            offset += stepSeconds
+        }
+
+        return mergeSegmentTexts(segmentTexts)
+    }
+
+    private static func mergeSegmentTexts(_ segmentTexts: [String]) -> String {
+        var merged: [String] = []
+        for rawText in segmentTexts {
+            // 切片边界常把泰语字符截断成非法字符 U+FFFD（�），先清掉
+            let text = rawText
+                .replacingOccurrences(of: "\u{FFFD}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedText = TranscriptTextProcessor.normalizedForComparison(text)
+            guard !normalizedText.isEmpty else { continue }
+            let isDuplicate = merged.contains { existing in
+                let normalizedExisting = TranscriptTextProcessor.normalizedForComparison(existing)
+                return normalizedExisting == normalizedText
+                    || normalizedExisting.contains(normalizedText)
+                    || normalizedText.contains(normalizedExisting)
+            }
+            if !isDuplicate {
+                merged.append(text)
+            }
+        }
+        return merged.joined(separator: "\n")
+    }
+
+    private static func audioDurationSeconds(audioFileURL: URL) async -> Double? {
+        let asset = AVURLAsset(url: audioFileURL)
+        guard let duration = try? await asset.load(.duration) else { return nil }
+        let seconds = CMTimeGetSeconds(duration)
+        return seconds.isFinite && seconds > 0 ? seconds : nil
+    }
+
+    private static func initialPrompt(for languageCode: String) -> String? {
+        switch languageCode {
+        case "th":
+            // 仅用一句中性、流畅的泰语把解码器锚定在泰文，避免开头漂移成英语幻觉。
+            // 刻意不带任何商品品类词、带货词或性别敬语，否则会把所有泰语视频
+            // 往该方向拉偏，非对应内容的视频会明显变差；Whisper 也可能把这些词回吐进转写。
+            "ต่อไปนี้เป็นคลิปวิดีโอภาษาไทย"
+        default:
+            nil
+        }
     }
 
     static func whisperLanguageCode(for language: LanguageOption) -> String {
