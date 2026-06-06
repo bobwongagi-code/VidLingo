@@ -509,7 +509,11 @@ final class TranslationSessionStore {
         guard letterCount >= 12 else { return false }
 
         if usesUnspacedScript(language) {
-            return !containsKnownHallucination(in: normalizedText)
+            // 无空格语言切不了词，但 Whisper 循环幻觉（如「ผัดกระเทียม」重复 8 次）
+            // 必须挡住，否则会把垃圾喂给翻译。用字符级重复检测兜底。
+            if containsKnownHallucination(in: normalizedText) { return false }
+            if isRepetitionLoop(normalizedText) { return false }
+            return true
         }
 
         let words = normalizedText
@@ -539,6 +543,27 @@ final class TranslationSessionStore {
 
     private func usesUnspacedScript(_ language: LanguageOption) -> Bool {
         ["th-TH", "zh-CN", "ja-JP"].contains(language.id)
+    }
+
+    /// 检测重复幻觉循环（针对无空格语言）：Whisper 卡住时会把同一短语重复几十遍。
+    private func isRepetitionLoop(_ text: String) -> Bool {
+        // 一、Whisper 循环时常在重复短语间插空格，先按空白切分判唯一率
+        let tokens = text.split { $0.isWhitespace }.map(String.init)
+        if tokens.count >= 6 {
+            let uniqueRatio = Double(Set(tokens).count) / Double(tokens.count)
+            if uniqueRatio < 0.35 { return true }
+        }
+        // 二、纯无空格的循环用字符三元组唯一率兜底（正常口播多样性远高于此）
+        let chars = Array(text)
+        if chars.count >= 18 {
+            var grams = Set<String>()
+            let total = chars.count - 2
+            for i in 0..<total {
+                grams.insert(String(chars[i..<i + 3]))
+            }
+            if Double(grams.count) / Double(total) < 0.25 { return true }
+        }
+        return false
     }
 
     private func containsKnownHallucination(in normalizedText: String) -> Bool {

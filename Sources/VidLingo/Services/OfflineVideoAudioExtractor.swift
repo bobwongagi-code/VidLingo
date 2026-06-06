@@ -23,7 +23,8 @@ enum OfflineVideoAudioExtractor {
             "-y",
             "-i", videoURL.path(percentEncoded: false),
             "-vn",
-            // 高低通 + 响度标准化让人声更稳定；不加 afftdn 激进降噪，它会吃掉人声反而更糟
+            // 高低通 + 响度标准化让人声更稳定；不加 afftdn 激进降噪，它会吃掉人声反而更糟。
+            // 不补开头静音：实测 adelay 会让泰语首段冒出词间空格，而开头漂移已由中性 initial prompt 解决。
             "-af", "highpass=f=80,lowpass=f=8000,loudnorm=I=-16:TP=-1.5:LRA=11",
             "-ar", "16000",
             "-ac", "1",

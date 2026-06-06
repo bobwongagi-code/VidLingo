@@ -116,7 +116,7 @@ enum LocalWhisperRunner {
 
             if language.id == "th-TH",
                let duration = await audioDurationSeconds(audioFileURL: audioFileURL),
-               duration > 22 {
+               duration > 25 {
                 return try transcribeSegmentedSynchronously(
                     audioFileURL: audioFileURL,
                     languageCode: "th",
@@ -284,7 +284,10 @@ enum LocalWhisperRunner {
         guard FileManager.default.fileExists(atPath: transcriptURL.path(percentEncoded: false)) else {
             throw LocalWhisperError.transcriptionFailed(diagnosticText.isEmpty ? "whisper-cli did not create a transcript file." : diagnosticText)
         }
-        let text = try String(contentsOf: transcriptURL, encoding: .utf8)
+        // 容错解码：分段硬切音频时，whisper 可能把泰语字符切在多字节中间，
+        // 写出非法 UTF-8 字节。严格 String(contentsOf:encoding:.utf8) 会抛 NSFileReadCorruptFileError，
+        // 让整条视频转写失败。改为有损解码（非法字节转 U+FFFD），后续合并里再清掉。
+        let text = String(decoding: try Data(contentsOf: transcriptURL), as: UTF8.self)
         return (text.trimmingCharacters(in: .whitespacesAndNewlines), diagnosticText)
     }
 
@@ -294,52 +297,119 @@ enum LocalWhisperRunner {
         duration: Double,
         temporaryDirectory directory: URL
     ) throws -> String {
-        let chunkSeconds = 15.0
+        // 20s 分段：比原 15s 减少分段数，离 whisper 30s 危险窗口还有 10s 余量，质量不受影响
+        let chunkSeconds = 20.0
         let overlapSeconds = 2.0
         let stepSeconds = chunkSeconds - overlapSeconds
-        var offset = 0.0
-        var segmentTexts: [String] = []
 
+        // 预算所有分段
+        var segmentsMut: [(offset: Double, duration: Double)] = []
+        var offset = 0.0
         while offset < duration {
-            let segmentDuration = min(chunkSeconds, duration - offset)
-            let result = try transcribeSynchronously(
-                audioFileURL: audioFileURL,
-                languageCode: languageCode,
-                temporaryDirectory: directory,
-                durationSeconds: Int(ceil(segmentDuration)),
-                offsetMilliseconds: Int((offset * 1_000).rounded()),
-                initialPrompt: initialPrompt(for: languageCode)
-            )
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty {
-                segmentTexts.append(text)
-            }
+            segmentsMut.append((offset, min(chunkSeconds, duration - offset)))
             offset += stepSeconds
         }
 
+        let segments = segmentsMut
+        let segmentCount = segments.count
+        // 最多 2 路并发：M4 Air 16GB 内存足够同时加载两份模型（~2.2GB），
+        // 避免更高并发争抢 ANE/GPU 反而变慢
+        let maxConcurrent = 2
+        // 用 class 包装共享状态，避免 Swift 6 Sendable 闭包捕获 mutable var 的警告
+        final class SharedState: @unchecked Sendable {
+            let lock = NSLock()
+            var results = [(index: Int, text: String)]()
+            var firstError: Error?
+        }
+        let state = SharedState()
+
+        // 分批并发，每批最多 maxConcurrent 个
+        var batchStart = 0
+        while batchStart < segmentCount {
+            let batchEnd = min(batchStart + maxConcurrent, segmentCount)
+            let batchSize = batchEnd - batchStart
+            let currentBatchStart = batchStart
+
+            DispatchQueue.concurrentPerform(iterations: batchSize) { i in
+                let idx = currentBatchStart + i
+                let seg = segments[idx]
+                // 每个分段用独立子目录，避免 transcript.txt 互相覆盖
+                let segDir = directory.appendingPathComponent("seg-\(idx)", isDirectory: true)
+                do {
+                    try FileManager.default.createDirectory(at: segDir, withIntermediateDirectories: true)
+                    let result = try transcribeSynchronously(
+                        audioFileURL: audioFileURL,
+                        languageCode: languageCode,
+                        temporaryDirectory: segDir,
+                        durationSeconds: Int(ceil(seg.duration)),
+                        offsetMilliseconds: Int((seg.offset * 1_000).rounded()),
+                        initialPrompt: initialPrompt(for: languageCode)
+                    )
+                    let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    state.lock.lock()
+                    if !text.isEmpty { state.results.append((idx, text)) }
+                    state.lock.unlock()
+                } catch {
+                    state.lock.lock()
+                    if state.firstError == nil { state.firstError = error }
+                    state.lock.unlock()
+                }
+            }
+
+            // 任何一段失败则整体失败
+            if let error = state.firstError { throw error }
+            batchStart = batchEnd
+        }
+
+        // 按分段顺序排列后合并
+        let segmentTexts = state.results.sorted { $0.index < $1.index }.map(\.text)
         return mergeSegmentTexts(segmentTexts)
     }
 
     private static func mergeSegmentTexts(_ segmentTexts: [String]) -> String {
-        var merged: [String] = []
+        var merged = ""
         for rawText in segmentTexts {
             // 切片边界常把泰语字符截断成非法字符 U+FFFD（�），先清掉
             let text = rawText
                 .replacingOccurrences(of: "\u{FFFD}", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalizedText = TranscriptTextProcessor.normalizedForComparison(text)
-            guard !normalizedText.isEmpty else { continue }
-            let isDuplicate = merged.contains { existing in
-                let normalizedExisting = TranscriptTextProcessor.normalizedForComparison(existing)
-                return normalizedExisting == normalizedText
-                    || normalizedExisting.contains(normalizedText)
-                    || normalizedText.contains(normalizedExisting)
+            guard !text.isEmpty else { continue }
+            if merged.isEmpty {
+                merged = text
+                continue
             }
-            if !isDuplicate {
-                merged.append(text)
+            // 整段已被包含（如最后一小段是上一段尾部的重复）→ 跳过
+            let normalizedMerged = TranscriptTextProcessor.normalizedForComparison(merged)
+            let normalizedText = TranscriptTextProcessor.normalizedForComparison(text)
+            if normalizedMerged.contains(normalizedText) { continue }
+            // 相邻段有 ~2s 重叠：找 merged 末尾与 text 开头的最长精确重叠，去掉重复部分再拼接。
+            // 重叠 >0 说明是词/短语中途接续，直接拼（泰语无空格，加空格会拆词）；
+            // 重叠 =0 是硬边界，补一个空格分隔。
+            let overlap = longestBoundaryOverlap(merged, text)
+            if overlap > 0 {
+                let appended = String(text.dropFirst(overlap))
+                guard !appended.isEmpty else { continue }
+                merged += appended
+            } else {
+                merged += " " + text
             }
         }
-        return merged.joined(separator: "\n")
+        return merged
+    }
+
+    /// 求 a 的后缀与 b 的前缀的最长相等长度（字符级，泰语无空格也适用）。
+    /// 限制搜索窗口（重叠约 2s），并要求最小长度，避免短串误配。
+    private static func longestBoundaryOverlap(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        var k = min(aChars.count, bChars.count, 120)
+        while k >= 8 {
+            if Array(aChars.suffix(k)) == Array(bChars.prefix(k)) {
+                return k
+            }
+            k -= 1
+        }
+        return 0
     }
 
     private static func audioDurationSeconds(audioFileURL: URL) async -> Double? {
