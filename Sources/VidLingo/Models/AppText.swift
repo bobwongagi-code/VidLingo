@@ -179,6 +179,10 @@ enum AppText {
         "\(provider) 没有返回译文。"
     }
 
+    static func translationRequestTimedOut(_ provider: String) -> String {
+        "\(provider) 请求超时。模型服务响应过慢或网络连接中断，请稍后重试。"
+    }
+
     static func translationRequestFailed(provider: String, statusCode: Int, message: String?) -> String {
         let detail = message.map { ": \($0)" } ?? ""
         return "\(provider) 请求失败（\(statusCode)）\(detail)"

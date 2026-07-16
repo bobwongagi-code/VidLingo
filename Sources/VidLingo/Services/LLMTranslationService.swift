@@ -1,6 +1,21 @@
 import Foundation
 
 actor LLMTranslationService {
+    private enum RequestTimeout {
+        static let productContext: TimeInterval = 90
+        static let transcriptTranslation: TimeInterval = 240
+        static let visualAnalysis: TimeInterval = 120
+        static let visualSalesCopy: TimeInterval = 180
+        static let resource: TimeInterval = 300
+    }
+
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = RequestTimeout.transcriptTranslation
+        configuration.timeoutIntervalForResource = RequestTimeout.resource
+        return URLSession(configuration: configuration)
+    }()
+
     static func supportsProductContextFrames(provider: TranslationProviderID, modelName: String) -> Bool {
         productContextVisionModel(provider: provider, currentModel: modelName) != nil
     }
@@ -10,7 +25,8 @@ actor LLMTranslationService {
     private func preparedRequest(
         provider: TranslationProviderID,
         modelName: String,
-        customBaseURL: String
+        customBaseURL: String,
+        timeout: TimeInterval
     ) throws -> (request: URLRequest, model: String) {
         let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { throw LLMTranslationError.missingModel }
@@ -27,6 +43,7 @@ actor LLMTranslationService {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         return (request, model)
@@ -45,7 +62,12 @@ actor LLMTranslationService {
     ) async throws -> String {
         guard !text.isEmpty else { return "" }
 
-        var (request, model) = try preparedRequest(provider: provider, modelName: modelName, customBaseURL: customBaseURL)
+        var (request, model) = try preparedRequest(
+            provider: provider,
+            modelName: modelName,
+            customBaseURL: customBaseURL,
+            timeout: RequestTimeout.productContext
+        )
         let prompt = productContextPrompt(text, fileName: fileName, source: source)
 
         // 优先尝试视觉模型，失败则 fallback 到纯文本
@@ -78,7 +100,12 @@ actor LLMTranslationService {
     ) async throws -> String {
         guard !text.isEmpty else { return text }
 
-        var (request, model) = try preparedRequest(provider: provider, modelName: modelName, customBaseURL: customBaseURL)
+        var (request, model) = try preparedRequest(
+            provider: provider,
+            modelName: modelName,
+            customBaseURL: customBaseURL,
+            timeout: RequestTimeout.transcriptTranslation
+        )
         request.httpBody = try JSONEncoder().encode(
             chatCompletionRequest(text, source: source, target: target, productContext: productContext, provider: provider, model: model)
         )
@@ -96,7 +123,12 @@ actor LLMTranslationService {
     ) async throws -> String {
         guard !frameJPEGData.isEmpty else { throw LLMTranslationError.visualFramesMissing }
 
-        var (request, model) = try preparedRequest(provider: provider, modelName: modelName, customBaseURL: customBaseURL)
+        var (request, model) = try preparedRequest(
+            provider: provider,
+            modelName: modelName,
+            customBaseURL: customBaseURL,
+            timeout: RequestTimeout.visualAnalysis
+        )
         guard let visionModel = Self.productContextVisionModel(provider: provider, currentModel: model) else {
             throw LLMTranslationError.visualModelUnsupported(provider.title)
         }
@@ -108,6 +140,7 @@ actor LLMTranslationService {
         let analysis = try parseVisualVideoAnalysis(from: try await sendChatCompletionRequest(request, provider: provider))
 
         // 第二轮：生成口播文案
+        request.timeoutInterval = RequestTimeout.visualSalesCopy
         request.httpBody = try JSONEncoder().encode(
             visionSalesCopyRequest(
                 prompt: visualSalesCopyPrompt(fileName: fileName, durationText: durationText, productContext: productContext, analysis: analysis),
@@ -123,7 +156,13 @@ actor LLMTranslationService {
         _ request: URLRequest,
         provider: TranslationProviderID
     ) async throws -> String {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await Self.session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw LLMTranslationError.requestTimedOut(provider: provider.title)
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw LLMTranslationError.invalidResponse
         }
@@ -754,6 +793,7 @@ enum LLMTranslationError: LocalizedError {
     case invalidEndpoint
     case invalidResponse
     case emptyOutput(String)
+    case requestTimedOut(provider: String)
     case requestFailed(provider: String, statusCode: Int, message: String?)
     case visualFramesMissing
     case visualModelUnsupported(String)
@@ -770,6 +810,8 @@ enum LLMTranslationError: LocalizedError {
             AppText.translationInvalidResponse
         case let .emptyOutput(provider):
             AppText.translationEmptyOutput(provider)
+        case let .requestTimedOut(provider):
+            AppText.translationRequestTimedOut(provider)
         case let .requestFailed(provider, statusCode, message):
             AppText.translationRequestFailed(provider: provider, statusCode: statusCode, message: message)
         case .visualFramesMissing:
