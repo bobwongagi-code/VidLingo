@@ -132,7 +132,7 @@ final class TranslationSessionStore {
 
                 // 无有效口播 → 尝试画面理解生成文案
                 guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
-                    pipelineHandleNoSpeech(videoURL: videoURL, params: params)
+                    await pipelineHandleNoSpeech(videoURL: videoURL, params: params)
                     return
                 }
 
@@ -289,39 +289,37 @@ final class TranslationSessionStore {
     }
 
     /// 无口播兜底：尝试用视觉模型生成文案，否则显示提示
-    private func pipelineHandleNoSpeech(videoURL: URL, params: TranslationParams) {
+    private func pipelineHandleNoSpeech(videoURL: URL, params: TranslationParams) async {
         let visualSourceText = AppText.noEffectiveSpeech
 
-        Task { @MainActor in
-            if LLMTranslationService.supportsProductContextFrames(provider: params.provider, modelName: params.modelName) {
-                statusMessage = AppText.generatingVisualSalesCopy(videoURL.lastPathComponent)
-                let frameJPEGData = await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
-                if let visualCopy = try? await LLMTranslationService().generateVisualSalesCopy(
-                    fileName: videoURL.lastPathComponent,
-                    durationText: offlineVideoDurationText,
-                    productContext: params.initialProductContext,
-                    frameJPEGData: frameJPEGData,
-                    provider: params.provider,
-                    modelName: params.modelName,
-                    customBaseURL: params.customBaseURL
-                ) {
-                    let translatedText = "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)"
-                    lines = [CaptionLine(
-                        sourceText: visualSourceText, translatedText: translatedText,
-                        translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
-                    )]
-                    saveOfflineVideoTranscript(sourceText: visualSourceText, translatedText: translatedText)
-                    statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
-                    return
-                }
+        if LLMTranslationService.supportsProductContextFrames(provider: params.provider, modelName: params.modelName) {
+            statusMessage = AppText.generatingVisualSalesCopy(videoURL.lastPathComponent)
+            let frameJPEGData = await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
+            if let visualCopy = try? await LLMTranslationService().generateVisualSalesCopy(
+                fileName: videoURL.lastPathComponent,
+                durationText: offlineVideoDurationText,
+                productContext: params.initialProductContext,
+                frameJPEGData: frameJPEGData,
+                provider: params.provider,
+                modelName: params.modelName,
+                customBaseURL: params.customBaseURL
+            ) {
+                let translatedText = "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)"
+                lines = [CaptionLine(
+                    sourceText: visualSourceText, translatedText: translatedText,
+                    translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
+                )]
+                saveOfflineVideoTranscript(sourceText: visualSourceText, translatedText: translatedText)
+                statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
+                return
             }
-
-            lines = [CaptionLine(
-                sourceText: visualSourceText, translatedText: AppText.noEffectiveSpeechDescription,
-                translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
-            )]
-            statusMessage = AppText.noEffectiveSpeech
         }
+
+        lines = [CaptionLine(
+            sourceText: visualSourceText, translatedText: AppText.noEffectiveSpeechDescription,
+            translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
+        )]
+        statusMessage = AppText.noEffectiveSpeech
     }
 
     /// 商品类型推断：根据口播文本和视频帧推断商品类型

@@ -34,7 +34,7 @@ enum AppText {
 
     static let translationModelSettings = "翻译模型"
     static let translationProvider = "模型服务"
-    static let translationModelPlaceholder = "模型名，例如 gpt-4o-mini / qwen-plus"
+    static let translationModelPlaceholder = "模型名，例如 gpt-4o-mini / qwen3.6-plus"
     static let translationEndpointPlaceholder = "OpenAI-compatible chat completions URL"
     static let translationAPIKeyConfigured = "API key 已保存"
     static let translationAPIKeyNotConfigured = "未保存 API key"
@@ -50,7 +50,7 @@ enum AppText {
     static let visualSalesCopyNotice = "未检测到有效口播。以下内容不是口播翻译，而是根据视频画面推断生成的中文口播文案。"
     static let visualFramesMissing = "没有可用于画面理解的视频截图。"
     static let transcriptionQualitySettings = "泰语转写质量"
-    static let elevenLabsAutomaticReviewDescription = "本地双模型无法可靠裁决时，自动在免费额度内用 ElevenLabs Scribe v2 复核。不会产生付费超额。"
+    static let elevenLabsAutomaticReviewDescription = "本地候选无法可靠裁决时，仅在本次预留免费额度充足时用 ElevenLabs Scribe v2 复核。"
     static let elevenLabsAPIKeyPlaceholder = "粘贴 ElevenLabs API key"
     static let elevenLabsAPIKeyNotConfigured = "未配置 ElevenLabs API key"
     static let elevenLabsAPIKeySaved = "ElevenLabs API key 已保存到 Keychain。"
@@ -112,7 +112,14 @@ enum AppText {
     }
 
     static func thaiLocalWhisperSource(specialistSegments: Int, generalSegments: Int) -> String {
-        "本地 Whisper 双模型裁决：泰语专用 \(specialistSegments) 段，通用模型 \(generalSegments) 段。"
+        switch (specialistSegments, generalSegments) {
+        case (_, 0):
+            "本地 Whisper 泰语专用模型转写：\(specialistSegments) 段。"
+        case (0, _):
+            "本地 Whisper 通用模型转写：\(generalSegments) 段。"
+        default:
+            "本地 Whisper 双模型裁决：泰语专用 \(specialistSegments) 段，通用模型 \(generalSegments) 段。"
+        }
     }
 
     static func localWhisperCloudUnavailable(_ localDescription: String, reason: String) -> String {

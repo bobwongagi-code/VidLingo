@@ -11,6 +11,8 @@ VidLingo 是一个本地优先的 macOS 短视频离线翻译器。它导入本�
 - 用 `ffmpeg` 本地提取语音音频。
 - 用 `whisper.cpp` 本地转写。
 - 开启自动检测时，优先使用 Whisper 判断口播语言。
+- 泰语优先使用 Pathumma 专用模型，对不确定分段才调用通用模型复核。
+- 泰语本地候选无法可靠裁决时，可选用 ElevenLabs Scribe v2 作为额度保护的兜底。
 - 用带货短视频语境 prompt 调用所选模型翻译整段内容。
 - 可选择 DeepSeek、OpenAI、千问、Claude 兼容接口，或自定义 OpenAI-compatible endpoint。
 - 本地保存原文和中文译文。
@@ -21,8 +23,10 @@ VidLingo 是一个本地优先的 macOS 短视频离线翻译器。它导入本�
 - Swift 6 工具链。
 - `PATH` 中可用的 `ffmpeg`。
 - `PATH` 中可用的 `whisper-cli` 或 whisper.cpp `main`。
-- 本地 Whisper 模型，推荐 `ggml-large-v3-turbo-q5_0.bin`。
+- 本地通用 Whisper 模型，推荐 `ggml-large-v3-q5_0.bin`。
+- 泰语可额外安装 `ggml-pathumma-th-large-v3-q5_0.bin`；VidLingo 会优先使用它，缺失时回退到通用模型。
 - 在应用中保存所选翻译服务的 API key。
+- 可选保存 ElevenLabs API key，仅在少数泰语兜底场景使用；发送音频前会检查剩余额度。
 
 VidLingo 会在这些目录查找 Whisper 模型：
 
@@ -41,9 +45,9 @@ VidLingo 用统一的 Chat Completions 风格请求支持这些内置服务：
 ```text
 DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flash
 OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
-Qwen / 千问     https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  qwen-plus
+Qwen / 千问     https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
 Qwen-MT        同一个千问 endpoint，模型名如 qwen-mt-flash 或 qwen-mt-plus
-Claude         https://api.anthropic.com/v1/chat/completions    claude-sonnet-4-5-20250929
+Claude         https://openrouter.ai/api/v1/chat/completions    claude-sonnet-4-5-20250929
 Custom         用户填写的 OpenAI-compatible chat completions URL
 ```
 

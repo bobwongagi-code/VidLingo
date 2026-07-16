@@ -16,12 +16,9 @@ enum WhisperDecoderProfile: String, Codable, Sendable {
 
 struct WhisperSegmentCandidate: Codable, Sendable {
     let profile: WhisperDecoderProfile
-    let offset: Double
     let duration: Double
     let text: String
     let meanTokenProbability: Double?
-    let modelFileName: String
-    let modelFingerprint: String
 }
 
 struct WhisperSegmentCandidates: Codable, Sendable {

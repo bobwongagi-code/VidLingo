@@ -4,6 +4,11 @@ All notable changes to VidLingo are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added adaptive Thai transcription: Pathumma runs first, then the general Whisper model reviews only uncertain segments.
+- Added an optional quota-guarded ElevenLabs Scribe v2 fallback for unresolved Thai local transcription candidates.
+
 ### Changed
 
 - Renamed the app and Swift package targets from AirTranslate to VidLingo.

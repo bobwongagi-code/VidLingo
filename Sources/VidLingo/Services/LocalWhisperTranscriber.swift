@@ -1,5 +1,4 @@
 import AVFoundation
-import CryptoKit
 import Foundation
 import VidLingoCore
 
@@ -199,7 +198,6 @@ enum LocalWhisperRunner {
                 return currentSegments()
             }
 
-            let generalFingerprint = try modelFingerprint(for: generalModelURL)
             let reviewSegments = reviewIndexes.map { segmentPlan[$0] }
             let reviewCandidates = try transcribeCandidateSegmentsSynchronously(
                 audioFileURL: audioFileURL,
@@ -208,8 +206,7 @@ enum LocalWhisperRunner {
                 modelURL: generalModelURL,
                 profile: .generalBeam,
                 beamSize: 5,
-                temporaryDirectory: directory.appendingPathComponent("general-review", isDirectory: true),
-                modelFingerprint: generalFingerprint
+                temporaryDirectory: directory.appendingPathComponent("general-review", isDirectory: true)
             )
             for (index, candidate) in zip(reviewIndexes, reviewCandidates) {
                 candidatesByIndex[index, default: []].append(candidate)
@@ -229,8 +226,7 @@ enum LocalWhisperRunner {
                     modelURL: generalModelURL,
                     profile: .generalBeam,
                     beamSize: 5,
-                    temporaryDirectory: directory.appendingPathComponent("general-full", isDirectory: true),
-                    modelFingerprint: generalFingerprint
+                    temporaryDirectory: directory.appendingPathComponent("general-full", isDirectory: true)
                 )
                 for (index, candidate) in zip(remainingIndexes, remainingCandidates) {
                     candidatesByIndex[index, default: []].append(candidate)
@@ -335,7 +331,6 @@ enum LocalWhisperRunner {
         temporaryDirectory directory: URL,
         durationSeconds: Int? = nil,
         offsetMilliseconds: Int? = nil,
-        initialPrompt: String? = nil,
         modelURL explicitModelURL: URL? = nil,
         beamSize: Int = 5
     ) throws -> WhisperRunResult {
@@ -374,9 +369,6 @@ enum LocalWhisperRunner {
         if let durationSeconds {
             arguments.append(contentsOf: ["-d", String(durationSeconds * 1_000)])
         }
-        if let initialPrompt, !initialPrompt.isEmpty {
-            arguments.append(contentsOf: ["--prompt", initialPrompt])
-        }
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = logHandle
@@ -410,16 +402,9 @@ enum LocalWhisperRunner {
         modelURL: URL,
         profile: WhisperDecoderProfile,
         beamSize: Int,
-        temporaryDirectory directory: URL,
-        modelFingerprint explicitModelFingerprint: String? = nil
+        temporaryDirectory directory: URL
     ) throws -> [WhisperSegmentCandidate] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let fingerprint: String
-        if let explicitModelFingerprint {
-            fingerprint = explicitModelFingerprint
-        } else {
-            fingerprint = try modelFingerprint(for: modelURL)
-        }
 
         final class SharedState: @unchecked Sendable {
             let lock = NSLock()
@@ -451,12 +436,9 @@ enum LocalWhisperRunner {
                     )
                     let candidate = WhisperSegmentCandidate(
                         profile: profile,
-                        offset: segment.offset,
                         duration: segment.duration,
                         text: result.text,
-                        meanTokenProbability: result.meanTokenProbability,
-                        modelFileName: modelURL.lastPathComponent,
-                        modelFingerprint: fingerprint
+                        meanTokenProbability: result.meanTokenProbability
                     )
                     state.lock.lock()
                     state.results[index] = candidate
@@ -498,18 +480,6 @@ enum LocalWhisperRunner {
         }
         guard !probabilities.isEmpty else { return nil }
         return probabilities.reduce(0, +) / Double(probabilities.count)
-    }
-
-    private static func modelFingerprint(for modelURL: URL) throws -> String {
-        let file = try FileHandle(forReadingFrom: modelURL)
-        defer { try? file.close() }
-        var hasher = SHA256()
-        while true {
-            let data = try file.read(upToCount: 4 * 1_024 * 1_024) ?? Data()
-            if data.isEmpty { break }
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func audioDurationSeconds(audioFileURL: URL) async -> Double? {
