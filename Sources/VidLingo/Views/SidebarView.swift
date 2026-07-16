@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var session: TranslationSessionStore
     @State private var apiKey = ""
+    @State private var elevenLabsAPIKey = ""
     @State private var isLibraryPresented = false
 
     var body: some View {
@@ -10,6 +11,7 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: 16) {
                 appHeader
                 languageSection
+                transcriptionQualitySection
                 modelSection
                 librarySection
             }
@@ -19,6 +21,41 @@ struct SidebarView: View {
         .sheet(isPresented: $isLibraryPresented) {
             TranscriptLibraryView(session: session)
         }
+    }
+
+    private var transcriptionQualitySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(AppText.transcriptionQualitySettings)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(AppText.elevenLabsAutomaticReviewDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            SecureField(AppText.elevenLabsAPIKeyPlaceholder, text: $elevenLabsAPIKey)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Text(session.hasElevenLabsAPIKey ? AppText.translationAPIKeyConfigured : AppText.translationAPIKeyNotConfigured)
+                    .font(.caption)
+                    .foregroundStyle(session.hasElevenLabsAPIKey ? .green : .secondary)
+                Spacer()
+                Button(AppText.saveTranslationAPIKey) {
+                    session.saveElevenLabsAPIKey(elevenLabsAPIKey)
+                    elevenLabsAPIKey = ""
+                }
+                .disabled(elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Button(AppText.removeTranslationAPIKey) {
+                session.removeElevenLabsAPIKey()
+                elevenLabsAPIKey = ""
+            }
+            .disabled(!session.hasElevenLabsAPIKey)
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var appHeader: some View {
@@ -156,4 +193,3 @@ struct SidebarView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
-

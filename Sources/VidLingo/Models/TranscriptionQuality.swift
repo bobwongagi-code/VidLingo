@@ -1,0 +1,71 @@
+import Foundation
+
+enum WhisperDecoderProfile: String, Codable, Sendable {
+    case thaiSpecialistGreedy
+    case generalBeam
+
+    var title: String {
+        switch self {
+        case .thaiSpecialistGreedy:
+            "泰语专用 · Greedy"
+        case .generalBeam:
+            "通用模型 · Beam 5"
+        }
+    }
+}
+
+struct WhisperSegmentCandidate: Codable, Sendable {
+    let profile: WhisperDecoderProfile
+    let offset: Double
+    let duration: Double
+    let text: String
+    let meanTokenProbability: Double?
+    let modelFileName: String
+    let modelFingerprint: String
+}
+
+struct WhisperSegmentCandidates: Codable, Sendable {
+    let index: Int
+    let offset: Double
+    let duration: Double
+    let candidates: [WhisperSegmentCandidate]
+}
+
+struct TranscriptionCandidateMetrics: Codable, Sendable {
+    let characterCount: Int
+    let characterDensity: Double
+    let thaiScriptRatio: Double
+    let trigramDiversity: Double
+    let meanTokenProbability: Double?
+    let isRepetitionLoop: Bool
+    let isValid: Bool
+}
+
+struct EvaluatedWhisperCandidate: Codable, Sendable {
+    let candidate: WhisperSegmentCandidate
+    let metrics: TranscriptionCandidateMetrics
+}
+
+struct EvaluatedWhisperSegment: Codable, Sendable {
+    let index: Int
+    let offset: Double
+    let duration: Double
+    let candidates: [EvaluatedWhisperCandidate]
+    let selectedProfile: WhisperDecoderProfile?
+    let cloudReason: String?
+}
+
+struct LocalTranscriptionAssessment: Codable, Sendable {
+    let selectedText: String
+    let segments: [EvaluatedWhisperSegment]
+    let cloudReasons: [String]
+
+    var shouldUseCloud: Bool {
+        !cloudReasons.isEmpty
+    }
+}
+
+struct TranscriptionPipelineOutcome: Sendable {
+    let sourceText: String
+    let sourceDescription: String
+}

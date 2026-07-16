@@ -31,7 +31,7 @@ enum TranslationProviderID: String, CaseIterable, Identifiable, Sendable {
         case .openAI:
             "gpt-4o-mini"
         case .qwen:
-            "qwen-plus"
+            "qwen3.6-plus"
         case .claudeCompatible:
             "claude-sonnet-4-5-20250929"
         case .custom:

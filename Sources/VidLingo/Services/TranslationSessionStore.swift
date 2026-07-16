@@ -43,7 +43,9 @@ final class TranslationSessionStore {
         didSet { persistSelectedSettings() }
     }
     var hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: .deepSeek)
+    var hasElevenLabsAPIKey = ElevenLabsAPIKeyStore.hasAPIKey
     var statusMessage = AppText.ready
+    var transcriptionSourceDescription = AppText.originalDescription
     var lines: [CaptionLine] = []
     var offlineVideoProductContext = ""
     var offlineVideoURL: URL?
@@ -65,6 +67,7 @@ final class TranslationSessionStore {
 
     func selectOfflineVideo(_ videoURL: URL) {
         lines.removeAll()
+        transcriptionSourceDescription = AppText.originalDescription
         offlineVideoProductContext = ""
         offlineVideoURL = videoURL
         offlineVideoFileName = videoURL.lastPathComponent
@@ -101,6 +104,7 @@ final class TranslationSessionStore {
         offlineVideoFileName = videoURL.lastPathComponent
         isOfflineVideoProcessing = true
         lines.removeAll()
+        transcriptionSourceDescription = AppText.originalDescription
         statusMessage = AppText.offlineVideoExtractingAudio(videoURL.lastPathComponent)
 
         Task { @MainActor in
@@ -120,9 +124,11 @@ final class TranslationSessionStore {
                 let transcriptSource = try await pipelineDetectLanguage(
                     audioURL: audioURL, videoURL: videoURL, params: params
                 )
-                let sourceText = try await pipelineTranscribe(
+                let transcriptionOutcome = try await pipelineTranscribe(
                     audioURL: audioURL, videoURL: videoURL, language: transcriptSource
                 )
+                let sourceText = transcriptionOutcome.sourceText
+                transcriptionSourceDescription = transcriptionOutcome.sourceDescription
 
                 // 无有效口播 → 尝试画面理解生成文案
                 guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
@@ -194,17 +200,92 @@ final class TranslationSessionStore {
         return params.fallbackSource
     }
 
-    /// 转写：用 Whisper 把音频转成文字
+    /// 转写：泰语用双模型裁决，必要时在免费额度内自动调用 ElevenLabs
     private func pipelineTranscribe(
         audioURL: URL, videoURL: URL, language: LanguageOption
-    ) async throws -> String {
+    ) async throws -> TranscriptionPipelineOutcome {
         statusMessage = AppText.offlineVideoTranscribing(videoURL.lastPathComponent)
-        let rawTranscript = try await LocalWhisperRunner.transcribe(audioFileURL: audioURL, language: language)
-        let sourceText = organizeTranscript(rawTranscript, language: language)
-        guard !sourceText.isEmpty else {
-            throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
+        guard language.id == "th-TH" else {
+            let rawTranscript = try await LocalWhisperRunner.transcribe(audioFileURL: audioURL, language: language)
+            let sourceText = organizeTranscript(rawTranscript, language: language)
+            guard !sourceText.isEmpty else {
+                throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
+            }
+            return TranscriptionPipelineOutcome(
+                sourceText: sourceText,
+                sourceDescription: AppText.localWhisperSource
+            )
         }
-        return sourceText
+
+        statusMessage = AppText.thaiDualWhisperTranscribing(videoURL.lastPathComponent)
+        let candidates = try await LocalWhisperRunner.transcribeThaiCandidates(audioFileURL: audioURL)
+        let assessment = TranscriptionQualityEvaluator.assess(candidates)
+        let localText = organizeTranscript(assessment.selectedText, language: language)
+        let localDescription = localTranscriptionDescription(for: assessment)
+
+        guard assessment.shouldUseCloud else {
+            return TranscriptionPipelineOutcome(
+                sourceText: localText,
+                sourceDescription: localDescription
+            )
+        }
+
+        guard let apiKey = try? ElevenLabsAPIKeyStore.readAPIKey(), !apiKey.isEmpty else {
+            return TranscriptionPipelineOutcome(
+                sourceText: localText,
+                sourceDescription: AppText.localWhisperCloudUnavailable(
+                    localDescription,
+                    reason: AppText.elevenLabsAPIKeyNotConfigured
+                )
+            )
+        }
+
+        let duration = await Self.audioDurationSeconds(for: audioURL)
+        guard duration > 0 else {
+            let error = AppText.elevenLabsDurationUnavailable
+            return TranscriptionPipelineOutcome(
+                sourceText: localText,
+                sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error)
+            )
+        }
+        let estimatedCredits = ElevenLabsTranscriber.estimatedCredits(duration: duration)
+        do {
+            let quota = try await ElevenLabsTranscriber.quota(apiKey: apiKey)
+            guard quota.remainingCredits >= estimatedCredits else {
+                let error = AppText.elevenLabsQuotaInsufficient(
+                    remaining: quota.remainingCredits,
+                    required: estimatedCredits
+                )
+                return TranscriptionPipelineOutcome(
+                    sourceText: localText,
+                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error)
+                )
+            }
+
+            statusMessage = AppText.elevenLabsReviewing(videoURL.lastPathComponent)
+            let cloudTranscript = try await ElevenLabsTranscriber.transcribeThai(audioURL: audioURL, apiKey: apiKey)
+            let cloudText = organizeTranscript(cloudTranscript.text, language: language)
+            guard ElevenLabsTranscriber.isTrustedTeacher(cloudTranscript), !cloudText.isEmpty else {
+                let error = AppText.elevenLabsQualityRejected
+                return TranscriptionPipelineOutcome(
+                    sourceText: localText,
+                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error)
+                )
+            }
+
+            return TranscriptionPipelineOutcome(
+                sourceText: cloudText,
+                sourceDescription: AppText.elevenLabsSource(reasons: assessment.cloudReasons)
+            )
+        } catch {
+            return TranscriptionPipelineOutcome(
+                sourceText: localText,
+                sourceDescription: AppText.localWhisperCloudUnavailable(
+                    localDescription,
+                    reason: error.localizedDescription
+                )
+            )
+        }
     }
 
     /// 无口播兜底：尝试用视觉模型生成文案，否则显示提示
@@ -310,6 +391,26 @@ final class TranslationSessionStore {
             try TranslationAPIKeyStore.deleteAPIKey(for: translationProvider)
             hasTranslationAPIKey = false
             statusMessage = AppText.translationAPIKeyRemoved(translationProvider.title)
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func saveElevenLabsAPIKey(_ key: String) {
+        do {
+            try ElevenLabsAPIKeyStore.saveAPIKey(key)
+            hasElevenLabsAPIKey = true
+            statusMessage = AppText.elevenLabsAPIKeySaved
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func removeElevenLabsAPIKey() {
+        do {
+            try ElevenLabsAPIKeyStore.deleteAPIKey()
+            hasElevenLabsAPIKey = false
+            statusMessage = AppText.elevenLabsAPIKeyRemoved
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -501,6 +602,16 @@ final class TranslationSessionStore {
         TranscriptTextProcessor.organizeTranscript(text, languageID: language.id)
     }
 
+    private func localTranscriptionDescription(for assessment: LocalTranscriptionAssessment) -> String {
+        let profiles = assessment.segments.compactMap(\.selectedProfile)
+        let specialistCount = profiles.filter { $0 == .thaiSpecialistGreedy }.count
+        let generalCount = profiles.filter { $0 == .generalBeam }.count
+        return AppText.thaiLocalWhisperSource(
+            specialistSegments: specialistCount,
+            generalSegments: generalCount
+        )
+    }
+
     private func hasEffectiveSpeechTranscript(_ text: String, language: LanguageOption) -> Bool {
         let normalizedText = text.lowercased()
         let letterCount = normalizedText.unicodeScalars.filter {
@@ -583,6 +694,13 @@ final class TranslationSessionStore {
         let seconds = duration.map(CMTimeGetSeconds) ?? 0
         guard seconds.isFinite, seconds > 0 else { return "" }
         return String(format: "%d:%02d", Int(seconds.rounded()) / 60, Int(seconds.rounded()) % 60)
+    }
+
+    private static func audioDurationSeconds(for audioURL: URL) async -> Double {
+        let asset = AVURLAsset(url: audioURL)
+        guard let duration = try? await asset.load(.duration) else { return 0 }
+        let seconds = CMTimeGetSeconds(duration)
+        return seconds.isFinite && seconds > 0 ? seconds : 0
     }
 
     private func restoreSelectedSettings() {

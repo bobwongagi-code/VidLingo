@@ -49,6 +49,15 @@ enum AppText {
     static let noEffectiveSpeechDescription = "这段视频可能没有可转写的人声，或 Whisper 只生成了重复幻觉文本。请手动填写商品类型，或换有清晰口播的视频。"
     static let visualSalesCopyNotice = "未检测到有效口播。以下内容不是口播翻译，而是根据视频画面推断生成的中文口播文案。"
     static let visualFramesMissing = "没有可用于画面理解的视频截图。"
+    static let transcriptionQualitySettings = "泰语转写质量"
+    static let elevenLabsAutomaticReviewDescription = "本地双模型无法可靠裁决时，自动在免费额度内用 ElevenLabs Scribe v2 复核。不会产生付费超额。"
+    static let elevenLabsAPIKeyPlaceholder = "粘贴 ElevenLabs API key"
+    static let elevenLabsAPIKeyNotConfigured = "未配置 ElevenLabs API key"
+    static let elevenLabsAPIKeySaved = "ElevenLabs API key 已保存到 Keychain。"
+    static let elevenLabsAPIKeyRemoved = "ElevenLabs API key 已删除。"
+    static let elevenLabsQualityRejected = "ElevenLabs 结果未通过质量检查"
+    static let elevenLabsDurationUnavailable = "无法读取音频时长，为避免额度超支未调用 ElevenLabs"
+    static let localWhisperSource = "本地 Whisper 转写结果。"
 
     static let savedTranscripts = "资料库"
     static let manageSavedTranscripts = "管理已保存记录"
@@ -92,6 +101,31 @@ enum AppText {
 
     static func offlineVideoTranscribing(_ fileName: String) -> String {
         "正在用本地 Whisper 转写 \(fileName)..."
+    }
+
+    static func thaiDualWhisperTranscribing(_ fileName: String) -> String {
+        "正在优先用泰语专用 Whisper 转写 \(fileName)，必要时由通用模型复核..."
+    }
+
+    static func elevenLabsReviewing(_ fileName: String) -> String {
+        "本地候选无法可靠裁决，正在用 ElevenLabs Scribe v2 复核 \(fileName)..."
+    }
+
+    static func thaiLocalWhisperSource(specialistSegments: Int, generalSegments: Int) -> String {
+        "本地 Whisper 双模型裁决：泰语专用 \(specialistSegments) 段，通用模型 \(generalSegments) 段。"
+    }
+
+    static func localWhisperCloudUnavailable(_ localDescription: String, reason: String) -> String {
+        "\(localDescription) ElevenLabs 未采用：\(reason)。"
+    }
+
+    static func elevenLabsSource(reasons: [String]) -> String {
+        let reason = reasons.joined(separator: "；")
+        return "ElevenLabs Scribe v2 自动复核结果。触发原因：\(reason)"
+    }
+
+    static func elevenLabsQuotaInsufficient(remaining: Int, required: Int) -> String {
+        "免费额度不足，剩余 \(remaining) credits，本次预计需要 \(required) credits"
     }
 
     static func inferringProductContext(_ fileName: String) -> String {
