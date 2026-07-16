@@ -60,9 +60,33 @@ struct LocalTranscriptionAssessment: Codable, Sendable {
     var shouldUseCloud: Bool {
         !cloudReasons.isEmpty
     }
+
+    var generalReviewSegmentIndexes: [Int] {
+        segments
+            .filter { segment in
+                segment.candidates.contains { $0.candidate.profile == .generalBeam }
+            }
+            .map(\.index)
+    }
+
+    var usedFullGeneralReview: Bool {
+        !segments.isEmpty && segments.allSatisfy { segment in
+            segment.candidates.contains { $0.candidate.profile == .thaiSpecialistGreedy }
+                && segment.candidates.contains { $0.candidate.profile == .generalBeam }
+        }
+    }
+}
+
+struct ThaiTranscriptionDiagnostics: Codable, Sendable {
+    let segmentCount: Int
+    let generalReviewSegmentIndexes: [Int]
+    let usedFullGeneralReview: Bool
+    let cloudReasons: [String]
+    let usedElevenLabs: Bool
 }
 
 struct TranscriptionPipelineOutcome: Sendable {
     let sourceText: String
     let sourceDescription: String
+    let thaiDiagnostics: ThaiTranscriptionDiagnostics?
 }

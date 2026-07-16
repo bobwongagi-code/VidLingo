@@ -111,28 +111,62 @@ final class TranslationSessionStore {
             offlineVideoDurationText = await Self.formattedVideoDuration(for: videoURL)
 
             var audioURL: URL?
+            var stageTimings = [OfflineTranslationStageTiming]()
+            var detectedLanguageID: String?
+            var thaiDiagnostics: ThaiTranscriptionDiagnostics?
+            var diagnosticOutcome = "failed"
+            var diagnosticError: String?
+            var videoDurationSeconds: Int?
+
+            func recordStage(_ name: String, startedAt: Date) {
+                let milliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+                stageTimings.append(OfflineTranslationStageTiming(name: name, milliseconds: milliseconds))
+            }
+
             defer {
                 if let audioURL { OfflineVideoAudioExtractor.removeTemporaryAudio(audioURL) }
                 if didAccess { videoURL.stopAccessingSecurityScopedResource() }
                 isOfflineVideoProcessing = false
+                OfflineTranslationDiagnostics.save(OfflineTranslationDiagnosticRecord(
+                    createdAt: Date(),
+                    languageID: detectedLanguageID,
+                    videoDurationSeconds: videoDurationSeconds,
+                    outcome: diagnosticOutcome,
+                    stages: stageTimings,
+                    thai: thaiDiagnostics,
+                    errorDescription: diagnosticError
+                ))
             }
 
             do {
+                let audioStartedAt = Date()
                 audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(from: videoURL)
                 guard let audioURL else { return }
+                recordStage("audioExtraction", startedAt: audioStartedAt)
+                videoDurationSeconds = Int((await Self.audioDurationSeconds(for: audioURL)).rounded())
 
+                let languageStartedAt = Date()
                 let transcriptSource = try await pipelineDetectLanguage(
                     audioURL: audioURL, videoURL: videoURL, params: params
                 )
+                recordStage("languageDetection", startedAt: languageStartedAt)
+                detectedLanguageID = transcriptSource.id
+
+                let transcriptionStartedAt = Date()
                 let transcriptionOutcome = try await pipelineTranscribe(
                     audioURL: audioURL, videoURL: videoURL, language: transcriptSource
                 )
+                recordStage("transcription", startedAt: transcriptionStartedAt)
                 let sourceText = transcriptionOutcome.sourceText
                 transcriptionSourceDescription = transcriptionOutcome.sourceDescription
+                thaiDiagnostics = transcriptionOutcome.thaiDiagnostics
 
                 // 无有效口播 → 尝试画面理解生成文案
                 guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
+                    let visualStartedAt = Date()
                     await pipelineHandleNoSpeech(videoURL: videoURL, params: params)
+                    recordStage("visualFallback", startedAt: visualStartedAt)
+                    diagnosticOutcome = "noEffectiveSpeech"
                     return
                 }
 
@@ -143,14 +177,18 @@ final class TranslationSessionStore {
                     translatedSourceText: sourceText, createdAt: createdAt, isFinal: true, revision: 1
                 )]
 
+                let productContextStartedAt = Date()
                 let productContext = await pipelineInferProductContext(
                     sourceText: sourceText, videoURL: videoURL, language: transcriptSource, params: params
                 )
+                recordStage("productContext", startedAt: productContextStartedAt)
 
+                let translationStartedAt = Date()
                 let translatedText = try await pipelineTranslate(
                     sourceText: sourceText, language: transcriptSource,
                     productContext: productContext, videoURL: videoURL, params: params
                 )
+                recordStage("translation", startedAt: translationStartedAt)
 
                 lines = [CaptionLine(
                     sourceText: sourceText, translatedText: translatedText,
@@ -158,7 +196,9 @@ final class TranslationSessionStore {
                 )]
                 saveOfflineVideoTranscript(sourceText: sourceText, translatedText: translatedText)
                 statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
+                diagnosticOutcome = "completed"
             } catch {
+                diagnosticError = error.localizedDescription
                 statusMessage = AppText.offlineVideoFailed(error.localizedDescription)
                 if lines.isEmpty {
                     lines = [CaptionLine(
@@ -213,7 +253,8 @@ final class TranslationSessionStore {
             }
             return TranscriptionPipelineOutcome(
                 sourceText: sourceText,
-                sourceDescription: AppText.localWhisperSource
+                sourceDescription: AppText.localWhisperSource,
+                thaiDiagnostics: nil
             )
         }
 
@@ -222,11 +263,19 @@ final class TranslationSessionStore {
         let assessment = TranscriptionQualityEvaluator.assess(candidates)
         let localText = organizeTranscript(assessment.selectedText, language: language)
         let localDescription = localTranscriptionDescription(for: assessment)
+        let localDiagnostics = ThaiTranscriptionDiagnostics(
+            segmentCount: assessment.segments.count,
+            generalReviewSegmentIndexes: assessment.generalReviewSegmentIndexes,
+            usedFullGeneralReview: assessment.usedFullGeneralReview,
+            cloudReasons: assessment.cloudReasons,
+            usedElevenLabs: false
+        )
 
         guard assessment.shouldUseCloud else {
             return TranscriptionPipelineOutcome(
                 sourceText: localText,
-                sourceDescription: localDescription
+                sourceDescription: localDescription,
+                thaiDiagnostics: localDiagnostics
             )
         }
 
@@ -236,7 +285,8 @@ final class TranslationSessionStore {
                 sourceDescription: AppText.localWhisperCloudUnavailable(
                     localDescription,
                     reason: AppText.elevenLabsAPIKeyNotConfigured
-                )
+                ),
+                thaiDiagnostics: localDiagnostics
             )
         }
 
@@ -245,7 +295,8 @@ final class TranslationSessionStore {
             let error = AppText.elevenLabsDurationUnavailable
             return TranscriptionPipelineOutcome(
                 sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error)
+                sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error),
+                thaiDiagnostics: localDiagnostics
             )
         }
         let estimatedCredits = ElevenLabsTranscriber.estimatedCredits(duration: duration)
@@ -258,7 +309,8 @@ final class TranslationSessionStore {
                 )
                 return TranscriptionPipelineOutcome(
                     sourceText: localText,
-                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error)
+                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error),
+                    thaiDiagnostics: localDiagnostics
                 )
             }
 
@@ -269,13 +321,21 @@ final class TranslationSessionStore {
                 let error = AppText.elevenLabsQualityRejected
                 return TranscriptionPipelineOutcome(
                     sourceText: localText,
-                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error)
+                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error),
+                    thaiDiagnostics: localDiagnostics
                 )
             }
 
             return TranscriptionPipelineOutcome(
                 sourceText: cloudText,
-                sourceDescription: AppText.elevenLabsSource(reasons: assessment.cloudReasons)
+                sourceDescription: AppText.elevenLabsSource(reasons: assessment.cloudReasons),
+                thaiDiagnostics: ThaiTranscriptionDiagnostics(
+                    segmentCount: localDiagnostics.segmentCount,
+                    generalReviewSegmentIndexes: localDiagnostics.generalReviewSegmentIndexes,
+                    usedFullGeneralReview: localDiagnostics.usedFullGeneralReview,
+                    cloudReasons: localDiagnostics.cloudReasons,
+                    usedElevenLabs: true
+                )
             )
         } catch {
             return TranscriptionPipelineOutcome(
@@ -283,7 +343,8 @@ final class TranslationSessionStore {
                 sourceDescription: AppText.localWhisperCloudUnavailable(
                     localDescription,
                     reason: error.localizedDescription
-                )
+                ),
+                thaiDiagnostics: localDiagnostics
             )
         }
     }

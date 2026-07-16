@@ -53,19 +53,20 @@ enum TranscriptionQualityEvaluator {
             return segments.map(\.index)
         }
 
-        let needsReview = primaryCandidates.filter { !isStrictHighConfidence($0.candidate, metrics: $0.metrics) }
+        let needsReview = primaryCandidates.filter { requiresGeneralReview($0.candidate, metrics: $0.metrics) }
         guard !needsReview.isEmpty else { return [] }
 
-        // 除风险段外，再抽一段最完整的正常口播交叉验证，防止流畅但明显错词的结果直接放行。
-        let representative = primaryCandidates
-            .filter { candidate in
-                !needsReview.contains { riskyCandidate in riskyCandidate.index == candidate.index }
-            }
-            .max { qualityScore($0.metrics) < qualityScore($1.metrics) }
-            ?? primaryCandidates.max { qualityScore($0.metrics) < qualityScore($1.metrics) }
+        // 通用模型只复核风险最高的两个分段。泰语方言、数字和单位本身不是风险，
+        // 否则带货口播会几乎整片触发第二模型，既慢又更容易引入跨模型错词。
+        let ranked = needsReview.sorted { left, right in
+            reviewRisk(left.candidate, metrics: left.metrics) > reviewRisk(right.candidate, metrics: right.metrics)
+        }
+        var indexes = Set(ranked.prefix(2).map(\.index))
 
-        var indexes = Set(needsReview.map(\.index))
-        if let representative {
+        // 只有一个风险段时，再抽一段内容最完整的正常口播做交叉验证。
+        if indexes.count == 1, let representative = primaryCandidates
+            .filter({ !indexes.contains($0.index) })
+            .max(by: { qualityScore($0.metrics) < qualityScore($1.metrics) }) {
             indexes.insert(representative.index)
         }
         return indexes.sorted()
@@ -91,7 +92,10 @@ enum TranscriptionQualityEvaluator {
             let similarity = trigramJaccard(specialist.text, general.text)
             let shorterLength = max(1, min(specialist.text.count, general.text.count))
             let lengthRatio = Double(max(specialist.text.count, general.text.count)) / Double(shorterLength)
-            if similarity < 0.55 || lengthRatio > 1.35 {
+            let specialistProbability = specialist.meanTokenProbability ?? 1
+            let generalProbability = general.meanTokenProbability ?? 1
+            if similarity < 0.28,
+               (lengthRatio > 1.70 || min(specialistProbability, generalProbability) < 0.70) {
                 return true
             }
         }
@@ -162,23 +166,38 @@ enum TranscriptionQualityEvaluator {
         )
     }
 
-    private static func isStrictHighConfidence(
+    private static func requiresGeneralReview(
         _ candidate: WhisperSegmentCandidate,
         metrics: TranscriptionCandidateMetrics
     ) -> Bool {
         guard metrics.isValid,
-              let probability = metrics.meanTokenProbability,
-              probability >= 0.80,
-              metrics.thaiScriptRatio >= 0.95,
-              metrics.characterDensity >= 4.0,
-              metrics.trigramDiversity >= 0.55,
-              !containsLongLatinRun(candidate.text),
-              !containsIsanMarkers(candidate.text),
-              factTokens(in: candidate.text).isEmpty,
-              !containsThaiFactPhrase(candidate.text) else {
-            return false
+              metrics.thaiScriptRatio >= 0.92,
+              metrics.characterDensity >= 3.0,
+              metrics.trigramDiversity >= 0.42,
+              !containsLongLatinRun(candidate.text) else {
+            return true
         }
-        return true
+
+        // 缺少 token 概率时仍按文本质量裁决；有概率且明显偏低时才升级为通用模型复核。
+        if let probability = metrics.meanTokenProbability, probability < 0.72 {
+            return true
+        }
+        return false
+    }
+
+    private static func reviewRisk(
+        _ candidate: WhisperSegmentCandidate,
+        metrics: TranscriptionCandidateMetrics
+    ) -> Double {
+        var risk = 0.0
+        if !metrics.isValid { risk += 100 }
+        risk += max(0, 0.92 - metrics.thaiScriptRatio) * 40
+        risk += max(0, 3.0 - metrics.characterDensity) * 12
+        risk += max(0, 0.42 - metrics.trigramDiversity) * 16
+        risk += max(0, 0.72 - (metrics.meanTokenProbability ?? 0.72)) * 30
+        if containsLongLatinRun(candidate.text) { risk += 30 }
+        if metrics.isRepetitionLoop { risk += 40 }
+        return risk
     }
 
     private static func containsLongLatinRun(_ text: String) -> Bool {
@@ -192,18 +211,6 @@ enum TranscriptionQualityEvaluator {
             }
         }
         return false
-    }
-
-    private static func containsIsanMarkers(_ text: String) -> Bool {
-        let markers = ["เฮา", "บ่", "เบิ่ง", "อิหลี", "อีหลี", "จังซี่", "จั่งซี้", "เด้อ", "คั่นไผ", "ฮอด", "ฮอย"]
-        return markers.reduce(into: 0) { count, marker in
-            if text.contains(marker) { count += 1 }
-        } >= 2
-    }
-
-    private static func containsThaiFactPhrase(_ text: String) -> Bool {
-        let pattern = #"(?:หลัก(?:สิบ|ร้อย|พัน|หมื่น|แสน|ล้าน)|(?:หนึ่ง|สอง|สาม|สี่|ห้า|หก|เจ็ด|แปด|เก้า|สิบ|ร้อย|พัน)\s*(?:ตัว|ชิ้น|บาท|กรัม|กิโลกรัม|กก|มล|ลิตร|ปี|เดือน))"#
-        return text.range(of: pattern, options: .regularExpression) != nil
     }
 
     private static func qualityScore(_ metrics: TranscriptionCandidateMetrics) -> Double {

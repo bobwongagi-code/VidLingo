@@ -11,6 +11,7 @@ DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 USER_APPLICATIONS_DIR="$HOME/Applications"
 USER_APP_BUNDLE="$USER_APPLICATIONS_DIR/$APP_NAME.app"
+USER_APP_BINARY="$USER_APP_BUNDLE/Contents/MacOS/$APP_NAME"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
@@ -21,13 +22,13 @@ CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
 cd "$ROOT_DIR"
 
 if [[ "$MODE" == "--open-existing" || "$MODE" == "open-existing" ]]; then
-  if [[ ! -x "$APP_BINARY" ]]; then
-    echo "Existing app bundle not found. Run ./script/build_and_run.sh once first." >&2
+  if [[ ! -x "$USER_APP_BINARY" ]]; then
+    echo "Installed app bundle not found. Run ./script/build_and_run.sh once first." >&2
     exit 1
   fi
   pkill -x "$APP_NAME" >/dev/null 2>&1 || true
   pkill -x VidLingo >/dev/null 2>&1 || true
-  /usr/bin/open -n "$APP_BUNDLE"
+  /usr/bin/open -n "$USER_APP_BUNDLE"
   exit 0
 fi
 
