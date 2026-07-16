@@ -62,8 +62,10 @@ SIGN_IDENTITY="$(select_code_sign_identity)"
 if [[ -n "$SIGN_IDENTITY" ]]; then
   /usr/bin/codesign --force --deep --timestamp=none --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 else
-  /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"
-  echo "warning: no persistent code signing identity found; macOS privacy grants may reset after rebuilds" >&2
+  # 临时签名也固定 designated requirement，避免每次构建都退化为随二进制变化的 cdhash 身份。
+  STABLE_ADHOC_REQUIREMENT="=designated => identifier \"$BUNDLE_ID\""
+  /usr/bin/codesign --force --deep --sign - --requirements "$STABLE_ADHOC_REQUIREMENT" "$APP_BUNDLE"
+  echo "warning: no Apple signing identity found; using a stable local designated requirement" >&2
 fi
 
 open_app() {
