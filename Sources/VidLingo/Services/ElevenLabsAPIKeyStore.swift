@@ -6,8 +6,18 @@ enum ElevenLabsAPIKeyStore {
     private static let account = "API_KEY"
 
     static var hasAPIKey: Bool {
-        guard let key = try? readAPIKey() else { return false }
-        return !key.isEmpty
+        availability == .configured
+    }
+
+    static var availability: KeychainAvailability {
+        do {
+            guard let key = try readAPIKey(), !key.isEmpty else { return .missing }
+            return .configured
+        } catch let error as ElevenLabsAPIKeyStoreError {
+            return error.availability
+        } catch {
+            return .corrupted
+        }
     }
 
     static func readAPIKey() throws -> String? {
@@ -35,13 +45,22 @@ enum ElevenLabsAPIKeyStore {
             throw ElevenLabsAPIKeyStoreError.invalidStoredKey
         }
 
-        SecItemDelete(baseQuery as CFDictionary)
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw ElevenLabsAPIKeyStoreError.keychainStatus(updateStatus)
+        }
         var query = baseQuery
         query[kSecValueData as String] = data
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw ElevenLabsAPIKeyStoreError.keychainStatus(status)
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw ElevenLabsAPIKeyStoreError.keychainStatus(addStatus)
         }
     }
 
@@ -65,6 +84,15 @@ enum ElevenLabsAPIKeyStoreError: LocalizedError {
     case emptyKey
     case invalidStoredKey
     case keychainStatus(OSStatus)
+
+    var availability: KeychainAvailability {
+        switch self {
+        case .emptyKey, .invalidStoredKey:
+            .corrupted
+        case let .keychainStatus(status):
+            KeychainAvailability.from(status: status)
+        }
+    }
 
     var errorDescription: String? {
         switch self {

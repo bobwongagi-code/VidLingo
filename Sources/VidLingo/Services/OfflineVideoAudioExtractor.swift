@@ -1,13 +1,20 @@
 import Foundation
 
 enum OfflineVideoAudioExtractor {
-    static func extractSpeechAudio(from videoURL: URL) async throws -> URL {
+    static func extractSpeechAudio(
+        from videoURL: URL,
+        token: ProcessCancellationToken
+    ) async throws -> URL {
         try await Task.detached(priority: .utility) {
-            try extractSpeechAudioSynchronously(from: videoURL)
+            try extractSpeechAudioSynchronously(from: videoURL, token: token)
         }.value
     }
 
-    private static func extractSpeechAudioSynchronously(from videoURL: URL) throws -> URL {
+    private static func extractSpeechAudioSynchronously(
+        from videoURL: URL,
+        token: ProcessCancellationToken
+    ) throws -> URL {
+        try token.check()
         guard let ffmpegURL = ExecutableFinder.findExecutable(named: ["ffmpeg"]) else {
             throw OfflineVideoTranslationError.ffmpegNotFound
         }
@@ -31,7 +38,8 @@ enum OfflineVideoAudioExtractor {
             "-sample_fmt", "s16",
             audioURL.path(percentEncoded: false)
         ]
-        if try runFFmpeg(ffmpegURL, arguments: enhancedArguments, directory: directory, logName: "ffmpeg-enhanced.log") {
+        if try runFFmpeg(ffmpegURL, arguments: enhancedArguments, directory: directory, logName: "ffmpeg-enhanced.log", token: token) {
+            try validateAudioSize(audioURL)
             return audioURL
         }
 
@@ -46,7 +54,8 @@ enum OfflineVideoAudioExtractor {
             "-sample_fmt", "s16",
             audioURL.path(percentEncoded: false)
         ]
-        if try runFFmpeg(ffmpegURL, arguments: plainArguments, directory: directory, logName: "ffmpeg-plain.log") {
+        if try runFFmpeg(ffmpegURL, arguments: plainArguments, directory: directory, logName: "ffmpeg-plain.log", token: token) {
+            try validateAudioSize(audioURL)
             return audioURL
         }
 
@@ -57,24 +66,38 @@ enum OfflineVideoAudioExtractor {
         throw OfflineVideoTranslationError.audioExtractionFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private static func runFFmpeg(_ ffmpegURL: URL, arguments: [String], directory: URL, logName: String) throws -> Bool {
+    private static func runFFmpeg(
+        _ ffmpegURL: URL,
+        arguments: [String],
+        directory: URL,
+        logName: String,
+        token: ProcessCancellationToken
+    ) throws -> Bool {
         let logURL = directory.appendingPathComponent(logName)
-        FileManager.default.createFile(atPath: logURL.path(percentEncoded: false), contents: nil)
-        let logHandle = try FileHandle(forWritingTo: logURL)
-        defer { try? logHandle.close() }
+        let logCapture = BoundedProcessLog()
+        logCapture.start()
+        defer { logCapture.finish(to: logURL) }
 
         let process = Process()
         process.executableURL = ffmpegURL
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = logHandle
-        try process.run()
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        process.standardError = logCapture.pipe
+        let status = try ProcessSupervisor.run(process, token: token)
+        return status == 0
     }
 
     private static func readLog(_ url: URL) -> String {
-        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        guard let data = try? Data(contentsOf: url) else { return "" }
+        let limitedData = data.suffix(32 * 1024)
+        return String(decoding: limitedData, as: UTF8.self)
+    }
+
+    private static func validateAudioSize(_ audioURL: URL) throws {
+        let size = (try? audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        guard size > 0, size <= MediaProcessingLimits.maxAudioBytes else {
+            throw OfflineVideoTranslationError.audioTooLarge
+        }
     }
 
     static func removeTemporaryAudio(_ audioURL: URL) {
@@ -86,6 +109,10 @@ enum OfflineVideoAudioExtractor {
 enum OfflineVideoTranslationError: LocalizedError {
     case ffmpegNotFound
     case audioExtractionFailed(String)
+    case audioTooLarge
+    case invalidVideo
+    case videoTooLarge
+    case videoTooLong
 
     var errorDescription: String? {
         switch self {
@@ -93,6 +120,14 @@ enum OfflineVideoTranslationError: LocalizedError {
             "ffmpeg not found. Install it with Homebrew before importing a video."
         case let .audioExtractionFailed(message):
             "Could not extract audio from video: \(message)"
+        case .audioTooLarge:
+            "提取出的音频超过允许大小，已停止处理。"
+        case .invalidVideo:
+            "视频无法读取或没有有效时长。"
+        case .videoTooLarge:
+            "视频文件超过允许大小，已停止处理。"
+        case .videoTooLong:
+            "视频超过允许时长，已停止处理。"
         }
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import VidLingoCore
 
 struct SidebarView: View {
     @Bindable var session: TranslationSessionStore
@@ -33,13 +34,23 @@ struct SidebarView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Toggle(AppText.cloudThaiTranscriptionConsent, isOn: $session.allowsCloudThaiTranscription)
+                .disabled(session.isOfflineVideoProcessing)
+            Toggle(AppText.cloudVideoFramesConsent, isOn: $session.allowsCloudVideoFrames)
+                .disabled(session.isOfflineVideoProcessing)
+            Toggle(AppText.visualSalesCopyConsent, isOn: $session.allowsVisualSalesCopy)
+                .disabled(session.isOfflineVideoProcessing)
+            Text(AppText.cloudConsentHelp)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             SecureField(AppText.elevenLabsAPIKeyPlaceholder, text: $elevenLabsAPIKey)
                 .textFieldStyle(.roundedBorder)
 
             HStack {
-                Text(session.hasElevenLabsAPIKey ? AppText.translationAPIKeyConfigured : AppText.translationAPIKeyNotConfigured)
+                Text(AppText.keychainAvailabilityText(session.elevenLabsAPIKeyAvailability))
                     .font(.caption)
-                    .foregroundStyle(session.hasElevenLabsAPIKey ? .green : .secondary)
+                    .foregroundStyle(session.elevenLabsAPIKeyAvailability == .configured ? .green : .secondary)
                 Spacer()
                 Button(AppText.saveTranslationAPIKey) {
                     session.saveElevenLabsAPIKey(elevenLabsAPIKey)
@@ -101,13 +112,9 @@ struct SidebarView: View {
             HStack {
                 Text(AppText.to)
                     .foregroundStyle(.secondary)
-                Picker(AppText.to, selection: $session.targetLanguage) {
-                    ForEach(LanguageOption.supported) { language in
-                        Text(language.localizedTitle).tag(language)
-                    }
-                }
-                .labelsHidden()
-                .disabled(session.isOfflineVideoProcessing)
+                Text("简体中文")
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(14)
@@ -142,9 +149,9 @@ struct SidebarView: View {
                 .textFieldStyle(.roundedBorder)
 
             HStack {
-                Text(session.hasTranslationAPIKey ? AppText.translationAPIKeyConfigured : AppText.translationAPIKeyNotConfigured)
+                Text(AppText.keychainAvailabilityText(session.translationAPIKeyAvailability))
                     .font(.caption)
-                    .foregroundStyle(session.hasTranslationAPIKey ? .green : .secondary)
+                    .foregroundStyle(session.translationAPIKeyAvailability == .configured ? .green : .secondary)
                 Spacer()
                 Button(AppText.saveTranslationAPIKey) {
                     session.saveTranslationAPIKey(apiKey)
@@ -158,6 +165,21 @@ struct SidebarView: View {
                 apiKey = ""
             }
             .disabled(!session.hasTranslationAPIKey)
+
+            if session.translationProvider == .custom {
+                Text("Custom endpoint 只接受 HTTPS；本机 HTTP 仅可通过开发环境变量显式开启。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let endpoint = try? EndpointValidator.validate(
+                    session.customTranslationBaseURL,
+                    allowLoopbackHTTP: ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
+                ) {
+                    Text("实际请求地址：\(endpoint.origin)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -185,6 +207,14 @@ struct SidebarView: View {
                 session.openTranscriptsFolder()
             } label: {
                 Label(AppText.openSaveFolder, systemImage: "folder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                session.clearDiagnostics()
+            } label: {
+                Label(AppText.clearDiagnostics, systemImage: "waveform.path.ecg")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)

@@ -10,7 +10,7 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 # 工作规范
 - 所有注释用中文，变量函数用英文。
 - 改动前先说明你打算改什么，确认后再动手。
-- 新功能先写实现，不主动加测试，除非我明确要求。
+- 新功能先写实现；修复数据、安全、任务状态等契约时，同步补充最小回归测试。
 - 数据库表名用下划线分隔，比如 user_profile。
 
 # 禁止项
@@ -84,4 +84,3 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-

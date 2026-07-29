@@ -1,8 +1,26 @@
 import Foundation
-import VidLingoCore
 
-enum TranscriptionQualityEvaluator {
-    static func assess(
+public enum TranscriptionQualityEvaluator {
+    public static let policyVersion = "thai-quality-v2"
+
+    private enum Thresholds {
+        // 这些阈值集中管理，配合 diagnostics 中的候选指标做后续实测校准。
+        static let minimumCharacters = 12
+        static let minimumThaiRatio = 0.80
+        static let minimumCharacterDensity = 2.0
+        static let minimumTokenProbability = 0.55
+        static let reviewThaiRatio = 0.92
+        static let reviewCharacterDensity = 3.0
+        static let reviewTrigramDiversity = 0.42
+        static let reviewTokenProbability = 0.72
+        static let severeSimilarity = 0.12
+        static let disagreementSimilarity = 0.20
+        static let fullReviewSimilarity = 0.28
+        static let severeLengthRatio = 1.50
+        static let fullReviewLengthRatio = 1.70
+    }
+
+    public static func assess(
         _ segments: [WhisperSegmentCandidates]
     ) -> LocalTranscriptionAssessment {
         var evaluatedSegments: [EvaluatedWhisperSegment] = []
@@ -42,7 +60,7 @@ enum TranscriptionQualityEvaluator {
 
     /// Pathumma 已覆盖全片后，挑出需要通用模型复核的分段。
     /// 所有分段都达到严格条件时直接采用专用模型，避免每条泰语视频重复跑两次。
-    static func generalReviewIndexes(for segments: [WhisperSegmentCandidates]) -> [Int] {
+    public static func generalReviewIndexes(for segments: [WhisperSegmentCandidates]) -> [Int] {
         let primaryCandidates = segments.compactMap { segment -> (index: Int, candidate: WhisperSegmentCandidate, metrics: TranscriptionCandidateMetrics)? in
             guard let candidate = segment.candidates.first(where: { $0.profile == .thaiSpecialistGreedy }) else {
                 return nil
@@ -73,7 +91,7 @@ enum TranscriptionQualityEvaluator {
     }
 
     /// 抽查段存在实质分歧时，升级为完整双模型复核，避免把一条难视频误判为简单视频。
-    static func requiresFullGeneralReview(
+    public static func requiresFullGeneralReview(
         _ segments: [WhisperSegmentCandidates],
         reviewedIndexes: [Int]
     ) -> Bool {
@@ -92,10 +110,13 @@ enum TranscriptionQualityEvaluator {
             let similarity = trigramJaccard(specialist.text, general.text)
             let shorterLength = max(1, min(specialist.text.count, general.text.count))
             let lengthRatio = Double(max(specialist.text.count, general.text.count)) / Double(shorterLength)
-            let specialistProbability = specialist.meanTokenProbability ?? 1
-            let generalProbability = general.meanTokenProbability ?? 1
-            if similarity < 0.28,
-               (lengthRatio > 1.70 || min(specialistProbability, generalProbability) < 0.70) {
+            let specialistProbability = specialist.meanTokenProbability
+            let generalProbability = general.meanTokenProbability
+            if similarity < Thresholds.fullReviewSimilarity,
+               (lengthRatio > Thresholds.fullReviewLengthRatio
+                || specialistProbability == nil
+                || generalProbability == nil
+                || min(specialistProbability ?? 0, generalProbability ?? 0) < 0.70) {
                 return true
             }
         }
@@ -123,10 +144,10 @@ enum TranscriptionQualityEvaluator {
         let similarity = trigramJaccard(first.candidate.text, second.candidate.text)
         let shorterLength = max(1, min(first.metrics.characterCount, second.metrics.characterCount))
         let lengthRatio = Double(max(first.metrics.characterCount, second.metrics.characterCount)) / Double(shorterLength)
-        if similarity < 0.12 {
+        if similarity < Thresholds.severeSimilarity {
             return (bestCandidate(in: valid), "两个本地候选内容几乎完全不同")
         }
-        if similarity < 0.20, lengthRatio > 1.50 {
+        if similarity < Thresholds.disagreementSimilarity, lengthRatio > Thresholds.severeLengthRatio {
             return (bestCandidate(in: valid), "两个本地候选严重不一致")
         }
 
@@ -148,10 +169,10 @@ enum TranscriptionQualityEvaluator {
         let density = Double(characters.count) / max(candidate.duration, 1)
         let diversity = trigramDiversity(normalized)
         let repetitionLoop = isRepetitionLoop(candidate.text, trigramDiversity: diversity)
-        let probabilityIsValid = candidate.meanTokenProbability.map { $0 >= 0.55 } ?? true
-        let isValid = characters.count >= 12
-            && thaiRatio >= 0.80
-            && density >= 2.0
+        let probabilityIsValid = candidate.meanTokenProbability.map { $0 >= Thresholds.minimumTokenProbability } ?? true
+        let isValid = characters.count >= Thresholds.minimumCharacters
+            && thaiRatio >= Thresholds.minimumThaiRatio
+            && density >= Thresholds.minimumCharacterDensity
             && probabilityIsValid
             && !repetitionLoop
 
@@ -161,6 +182,7 @@ enum TranscriptionQualityEvaluator {
             thaiScriptRatio: thaiRatio,
             trigramDiversity: diversity,
             meanTokenProbability: candidate.meanTokenProbability,
+            tokenProbabilityAvailable: candidate.meanTokenProbability != nil,
             isRepetitionLoop: repetitionLoop,
             isValid: isValid
         )
@@ -171,15 +193,16 @@ enum TranscriptionQualityEvaluator {
         metrics: TranscriptionCandidateMetrics
     ) -> Bool {
         guard metrics.isValid,
-              metrics.thaiScriptRatio >= 0.92,
-              metrics.characterDensity >= 3.0,
-              metrics.trigramDiversity >= 0.42,
+              metrics.thaiScriptRatio >= Thresholds.reviewThaiRatio,
+              metrics.characterDensity >= Thresholds.reviewCharacterDensity,
+              metrics.trigramDiversity >= Thresholds.reviewTrigramDiversity,
               !containsLongLatinRun(candidate.text) else {
             return true
         }
 
-        // 缺少 token 概率时仍按文本质量裁决；有概率且明显偏低时才升级为通用模型复核。
-        if let probability = metrics.meanTokenProbability, probability < 0.72 {
+        // 缺少 token 概率是独立的不确定状态，不能伪装成固定中等置信度。
+        guard metrics.tokenProbabilityAvailable else { return true }
+        if let probability = metrics.meanTokenProbability, probability < Thresholds.reviewTokenProbability {
             return true
         }
         return false
@@ -191,10 +214,14 @@ enum TranscriptionQualityEvaluator {
     ) -> Double {
         var risk = 0.0
         if !metrics.isValid { risk += 100 }
-        risk += max(0, 0.92 - metrics.thaiScriptRatio) * 40
-        risk += max(0, 3.0 - metrics.characterDensity) * 12
-        risk += max(0, 0.42 - metrics.trigramDiversity) * 16
-        risk += max(0, 0.72 - (metrics.meanTokenProbability ?? 0.72)) * 30
+        risk += max(0, Thresholds.reviewThaiRatio - metrics.thaiScriptRatio) * 40
+        risk += max(0, Thresholds.reviewCharacterDensity - metrics.characterDensity) * 12
+        risk += max(0, Thresholds.reviewTrigramDiversity - metrics.trigramDiversity) * 16
+        if let probability = metrics.meanTokenProbability {
+            risk += max(0, Thresholds.reviewTokenProbability - probability) * 30
+        } else {
+            risk += 20
+        }
         if containsLongLatinRun(candidate.text) { risk += 30 }
         if metrics.isRepetitionLoop { risk += 40 }
         return risk
@@ -215,7 +242,7 @@ enum TranscriptionQualityEvaluator {
 
     private static func qualityScore(_ metrics: TranscriptionCandidateMetrics) -> Double {
         let densityScore = min(metrics.characterDensity / 10, 1) * 30
-        let probabilityScore = (metrics.meanTokenProbability ?? 0.65) * 30
+        let probabilityScore = (metrics.meanTokenProbability ?? 0) * 30
         let diversityScore = min(metrics.trigramDiversity / 0.60, 1) * 20
         let scriptScore = metrics.thaiScriptRatio * 20
         return densityScore + probabilityScore + diversityScore + scriptScore

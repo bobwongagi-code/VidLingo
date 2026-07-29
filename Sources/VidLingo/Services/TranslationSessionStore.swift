@@ -6,8 +6,10 @@ import VidLingoCore
 
 private enum SettingsKey {
     static let sourceLanguageID = "sourceLanguageID"
-    static let targetLanguageID = "targetLanguageID"
     static let isSourceAutoDetectionEnabled = "isSourceAutoDetectionEnabled"
+    static let allowsCloudThaiTranscription = "allowsCloudThaiTranscription"
+    static let allowsCloudVideoFrames = "allowsCloudVideoFrames"
+    static let allowsVisualSalesCopy = "allowsVisualSalesCopy"
     static let translationProviderID = "translationProviderID"
     static let customTranslationBaseURL = "customTranslationBaseURL"
 
@@ -32,7 +34,7 @@ final class TranslationSessionStore {
         didSet {
             guard !isRestoringSelectedSettings else { return }
             translationModelName = storedTranslationModelName(for: translationProvider)
-            hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: translationProvider)
+            translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: translationProvider)
             persistSelectedSettings()
         }
     }
@@ -42,8 +44,19 @@ final class TranslationSessionStore {
     var customTranslationBaseURL = "" {
         didSet { persistSelectedSettings() }
     }
-    var hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: .deepSeek)
-    var hasElevenLabsAPIKey = ElevenLabsAPIKeyStore.hasAPIKey
+    var translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: .deepSeek)
+    var elevenLabsAPIKeyAvailability = ElevenLabsAPIKeyStore.availability
+    var hasTranslationAPIKey: Bool { translationAPIKeyAvailability == .configured }
+    var hasElevenLabsAPIKey: Bool { elevenLabsAPIKeyAvailability == .configured }
+    var allowsCloudThaiTranscription = false {
+        didSet { persistSelectedSettings() }
+    }
+    var allowsCloudVideoFrames = false {
+        didSet { persistSelectedSettings() }
+    }
+    var allowsVisualSalesCopy = false {
+        didSet { persistSelectedSettings() }
+    }
     var statusMessage = AppText.ready
     var transcriptionSourceDescription = AppText.originalDescription
     var lines: [CaptionLine] = []
@@ -58,7 +71,49 @@ final class TranslationSessionStore {
     var savedDraftSourceText = ""
     var savedDraftTranslationText = ""
 
+    var offlineVideoExecutionPlan: String {
+        var steps = ["本地提取音频", "本地 Whisper 完整转写"]
+        if allowsCloudThaiTranscription {
+            steps.append("泰语不确定时，可能上传音频到 ElevenLabs Scribe v2（按额度计费）")
+        }
+        let supportsVision = LLMTranslationService.supportsProductContextFrames(
+            provider: translationProvider,
+            modelName: translationModelName
+        )
+        if allowsCloudVideoFrames && supportsVision {
+            steps.append("可能上传抽取的视频截图到 \(translationProvider.title) \(translationModelName)")
+        }
+        if allowsVisualSalesCopy && allowsCloudVideoFrames && supportsVision {
+            steps.append("无口播时，可能调用视觉模型生成文案")
+        }
+        steps.append("调用 \(translationProvider.title) \(translationModelName) 翻译为简体中文")
+        return steps.joined(separator: "；")
+    }
+
+    var offlineTranslationConfigurationWarning: String? {
+        guard translationAPIKeyAvailability == .configured else {
+            return AppText.keychainAvailabilityText(translationAPIKeyAvailability)
+        }
+        guard !translationModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return AppText.translationModelMissing
+        }
+        if translationProvider == .custom {
+            let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
+            if (try? EndpointValidator.validate(customTranslationBaseURL, allowLoopbackHTTP: allowLocalHTTP)) == nil {
+                return AppText.translationEndpointInvalid
+            }
+        }
+        return nil
+    }
+
+    var canStartOfflineVideoTranslation: Bool {
+        offlineVideoURL != nil && !isOfflineVideoProcessing && offlineTranslationConfigurationWarning == nil
+    }
+
     private var isRestoringSelectedSettings = false
+    private var processingTask: Task<Void, Never>?
+    private var processingToken: ProcessCancellationToken?
+    private let transcriptRepository = TranscriptRepository()
 
     init() {
         restoreSelectedSettings()
@@ -75,19 +130,34 @@ final class TranslationSessionStore {
         statusMessage = AppText.confirmVideoContent
 
         Task { @MainActor in
-            offlineVideoDurationText = await Self.formattedVideoDuration(for: videoURL)
+            offlineVideoDurationText = await OfflineTranslationCoordinator.formattedVideoDuration(for: videoURL)
         }
     }
 
     func startOfflineVideoTranslation() {
         guard let offlineVideoURL else { return }
+        guard canStartOfflineVideoTranslation else {
+            statusMessage = offlineTranslationConfigurationWarning ?? AppText.translationInvalidResponse
+            return
+        }
         translateOfflineShortVideo(offlineVideoURL)
+    }
+
+    func cancelOfflineVideoTranslation() {
+        guard isOfflineVideoProcessing else { return }
+        processingToken?.cancel()
+        processingTask?.cancel()
+        statusMessage = AppText.offlineVideoCancelled
     }
 
     func translateOfflineShortVideo(_ videoURL: URL) {
         guard !isOfflineVideoProcessing else { return }
+        guard offlineTranslationConfigurationWarning == nil else {
+            statusMessage = offlineTranslationConfigurationWarning ?? AppText.translationInvalidResponse
+            return
+        }
 
-        // 快照当前设置，避免 pipeline 运行中用户改动影响结果
+        // 快照当前设置，避免任务运行中用户改动影响结果。
         let params = TranslationParams(
             fallbackSource: sourceLanguage,
             target: targetLanguage,
@@ -96,8 +166,13 @@ final class TranslationSessionStore {
             modelName: translationModelName,
             customBaseURL: customTranslationBaseURL,
             shouldAutoDetectLanguage: isSourceAutoDetectionEnabled,
-            shouldInferProductContext: isProductContextInferenceEnabled
+            shouldInferProductContext: isProductContextInferenceEnabled,
+            allowsCloudThaiTranscription: allowsCloudThaiTranscription,
+            allowsCloudVideoFrames: allowsCloudVideoFrames,
+            allowsVisualSalesCopy: allowsVisualSalesCopy
         )
+        let token = ProcessCancellationToken(timeout: MediaProcessingLimits.totalTaskTimeout)
+        processingToken = token
         let didAccess = videoURL.startAccessingSecurityScopedResource()
 
         offlineVideoURL = videoURL
@@ -107,99 +182,74 @@ final class TranslationSessionStore {
         transcriptionSourceDescription = AppText.originalDescription
         statusMessage = AppText.offlineVideoExtractingAudio(videoURL.lastPathComponent)
 
-        Task { @MainActor in
-            offlineVideoDurationText = await Self.formattedVideoDuration(for: videoURL)
-
-            var audioURL: URL?
-            var stageTimings = [OfflineTranslationStageTiming]()
-            var detectedLanguageID: String?
-            var thaiDiagnostics: ThaiTranscriptionDiagnostics?
-            var diagnosticOutcome = "failed"
-            var diagnosticError: String?
-            var videoDurationSeconds: Int?
-
-            func recordStage(_ name: String, startedAt: Date) {
-                let milliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
-                stageTimings.append(OfflineTranslationStageTiming(name: name, milliseconds: milliseconds))
-            }
-
+        let task = Task { @MainActor in
             defer {
-                if let audioURL { OfflineVideoAudioExtractor.removeTemporaryAudio(audioURL) }
                 if didAccess { videoURL.stopAccessingSecurityScopedResource() }
                 isOfflineVideoProcessing = false
-                OfflineTranslationDiagnostics.save(OfflineTranslationDiagnosticRecord(
-                    createdAt: Date(),
-                    languageID: detectedLanguageID,
-                    videoDurationSeconds: videoDurationSeconds,
-                    outcome: diagnosticOutcome,
-                    stages: stageTimings,
-                    thai: thaiDiagnostics,
-                    errorDescription: diagnosticError
-                ))
+                processingToken = nil
+                processingTask = nil
             }
 
             do {
-                let audioStartedAt = Date()
-                audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(from: videoURL)
-                guard let audioURL else { return }
-                recordStage("audioExtraction", startedAt: audioStartedAt)
-                videoDurationSeconds = Int((await Self.audioDurationSeconds(for: audioURL)).rounded())
-
-                let languageStartedAt = Date()
-                let transcriptSource = try await pipelineDetectLanguage(
-                    audioURL: audioURL, videoURL: videoURL, params: params
+                offlineVideoDurationText = await OfflineTranslationCoordinator.formattedVideoDuration(for: videoURL)
+                let result = try await OfflineTranslationCoordinator().run(
+                    request: OfflineTranslationRunRequest(
+                        videoURL: videoURL,
+                        fallbackSource: params.fallbackSource,
+                        target: params.target,
+                        initialProductContext: params.initialProductContext,
+                        provider: params.provider,
+                        modelName: params.modelName,
+                        customBaseURL: params.customBaseURL,
+                        shouldAutoDetectLanguage: params.shouldAutoDetectLanguage,
+                        shouldInferProductContext: params.shouldInferProductContext,
+                        allowsCloudThaiTranscription: params.allowsCloudThaiTranscription,
+                        allowsCloudVideoFrames: params.allowsCloudVideoFrames,
+                        allowsVisualSalesCopy: params.allowsVisualSalesCopy
+                    ),
+                    token: token,
+                    reportProgress: { message in
+                        await MainActor.run {
+                            self.statusMessage = message
+                        }
+                    }
                 )
-                recordStage("languageDetection", startedAt: languageStartedAt)
-                detectedLanguageID = transcriptSource.id
-
-                let transcriptionStartedAt = Date()
-                let transcriptionOutcome = try await pipelineTranscribe(
-                    audioURL: audioURL, videoURL: videoURL, language: transcriptSource
-                )
-                recordStage("transcription", startedAt: transcriptionStartedAt)
-                let sourceText = transcriptionOutcome.sourceText
-                transcriptionSourceDescription = transcriptionOutcome.sourceDescription
-                thaiDiagnostics = transcriptionOutcome.thaiDiagnostics
-
-                // 无有效口播 → 尝试画面理解生成文案
-                guard hasEffectiveSpeechTranscript(sourceText, language: transcriptSource) else {
-                    let visualStartedAt = Date()
-                    await pipelineHandleNoSpeech(videoURL: videoURL, params: params)
-                    recordStage("visualFallback", startedAt: visualStartedAt)
-                    diagnosticOutcome = "noEffectiveSpeech"
-                    return
+                if let availability = result.elevenLabsAPIKeyAvailability {
+                    elevenLabsAPIKeyAvailability = availability
                 }
-
-                // 显示转写结果，进入翻译阶段
-                let createdAt = Date()
+                transcriptionSourceDescription = result.sourceDescription
+                if !result.productContext.isEmpty {
+                    offlineVideoProductContext = result.productContext
+                }
                 lines = [CaptionLine(
-                    sourceText: sourceText, translatedText: AppText.translating,
-                    translatedSourceText: sourceText, createdAt: createdAt, isFinal: true, revision: 1
+                    sourceText: result.sourceText,
+                    translatedText: result.translatedText,
+                    translatedSourceText: result.sourceText,
+                    createdAt: Date(),
+                    isFinal: true,
+                    revision: 2
                 )]
-
-                let productContextStartedAt = Date()
-                let productContext = await pipelineInferProductContext(
-                    sourceText: sourceText, videoURL: videoURL, language: transcriptSource, params: params
-                )
-                recordStage("productContext", startedAt: productContextStartedAt)
-
-                let translationStartedAt = Date()
-                let translatedText = try await pipelineTranslate(
-                    sourceText: sourceText, language: transcriptSource,
-                    productContext: productContext, videoURL: videoURL, params: params
-                )
-                recordStage("translation", startedAt: translationStartedAt)
-
-                lines = [CaptionLine(
-                    sourceText: sourceText, translatedText: translatedText,
-                    translatedSourceText: sourceText, createdAt: createdAt, isFinal: true, revision: 2
-                )]
-                saveOfflineVideoTranscript(sourceText: sourceText, translatedText: translatedText)
+                try token.check()
+                if let kind = result.artifactKind {
+                    try saveOfflineVideoTranscript(
+                        sourceText: result.sourceText,
+                        translatedText: result.translatedText,
+                        sourceLanguage: result.sourceLanguage,
+                        params: params,
+                        kind: kind,
+                        frameData: result.frameData,
+                        videoFileName: videoURL.lastPathComponent
+                    )
+                }
                 statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
-                diagnosticOutcome = "completed"
+            } catch ProcessSupervisorError.cancelled {
+                statusMessage = AppText.offlineVideoCancelled
+            } catch is CancellationError {
+                statusMessage = AppText.offlineVideoCancelled
+            } catch ProcessSupervisorError.deadlineExceeded {
+                statusMessage = AppText.offlineVideoFailed(ProcessSupervisorError.deadlineExceeded.localizedDescription)
             } catch {
-                diagnosticError = error.localizedDescription
-                statusMessage = AppText.offlineVideoFailed(error.localizedDescription)
+                statusMessage = AppText.offlineVideoFailed(sanitizedErrorDescription(error))
                 if lines.isEmpty {
                     lines = [CaptionLine(
                         sourceText: videoURL.lastPathComponent, translatedText: statusMessage,
@@ -208,6 +258,7 @@ final class TranslationSessionStore {
                 }
             }
         }
+        processingTask = task
     }
 
     // MARK: - Pipeline 参数快照
@@ -221,213 +272,9 @@ final class TranslationSessionStore {
         let customBaseURL: String
         let shouldAutoDetectLanguage: Bool
         let shouldInferProductContext: Bool
-    }
-
-    // MARK: - Pipeline 步骤
-
-    /// 语言检测：如果开启自动检测，用 Whisper 检测前 18 秒音频的语言
-    private func pipelineDetectLanguage(
-        audioURL: URL, videoURL: URL, params: TranslationParams
-    ) async throws -> LanguageOption {
-        guard params.shouldAutoDetectLanguage else { return params.fallbackSource }
-
-        statusMessage = AppText.offlineVideoDetectingLanguage(videoURL.lastPathComponent)
-        if let detection = try await LocalWhisperRunner.detectLanguageWithTranscript(audioFileURL: audioURL) {
-            sourceLanguage = detection.language
-            statusMessage = AppText.offlineVideoDetectedLanguage(detection.language.localizedTitle)
-            return detection.language
-        }
-        return params.fallbackSource
-    }
-
-    /// 转写：泰语用双模型裁决，必要时在免费额度内自动调用 ElevenLabs
-    private func pipelineTranscribe(
-        audioURL: URL, videoURL: URL, language: LanguageOption
-    ) async throws -> TranscriptionPipelineOutcome {
-        statusMessage = AppText.offlineVideoTranscribing(videoURL.lastPathComponent)
-        guard language.id == "th-TH" else {
-            let rawTranscript = try await LocalWhisperRunner.transcribe(audioFileURL: audioURL, language: language)
-            let sourceText = organizeTranscript(rawTranscript, language: language)
-            guard !sourceText.isEmpty else {
-                throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
-            }
-            return TranscriptionPipelineOutcome(
-                sourceText: sourceText,
-                sourceDescription: AppText.localWhisperSource,
-                thaiDiagnostics: nil
-            )
-        }
-
-        statusMessage = AppText.thaiDualWhisperTranscribing(videoURL.lastPathComponent)
-        let candidates = try await LocalWhisperRunner.transcribeThaiCandidates(audioFileURL: audioURL)
-        let assessment = TranscriptionQualityEvaluator.assess(candidates)
-        let localText = organizeTranscript(assessment.selectedText, language: language)
-        let localDescription = localTranscriptionDescription(for: assessment)
-        let localDiagnostics = ThaiTranscriptionDiagnostics(
-            segmentCount: assessment.segments.count,
-            generalReviewSegmentIndexes: assessment.generalReviewSegmentIndexes,
-            usedFullGeneralReview: assessment.usedFullGeneralReview,
-            cloudReasons: assessment.cloudReasons,
-            usedElevenLabs: false
-        )
-
-        guard assessment.shouldUseCloud else {
-            return TranscriptionPipelineOutcome(
-                sourceText: localText,
-                sourceDescription: localDescription,
-                thaiDiagnostics: localDiagnostics
-            )
-        }
-
-        guard let apiKey = try? ElevenLabsAPIKeyStore.readAPIKey(), !apiKey.isEmpty else {
-            return TranscriptionPipelineOutcome(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: AppText.elevenLabsAPIKeyNotConfigured
-                ),
-                thaiDiagnostics: localDiagnostics
-            )
-        }
-
-        let duration = await Self.audioDurationSeconds(for: audioURL)
-        guard duration > 0 else {
-            let error = AppText.elevenLabsDurationUnavailable
-            return TranscriptionPipelineOutcome(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error),
-                thaiDiagnostics: localDiagnostics
-            )
-        }
-        let estimatedCredits = ElevenLabsTranscriber.estimatedCredits(duration: duration)
-        do {
-            let quota = try await ElevenLabsTranscriber.quota(apiKey: apiKey)
-            guard quota.remainingCredits >= estimatedCredits else {
-                let error = AppText.elevenLabsQuotaInsufficient(
-                    remaining: quota.remainingCredits,
-                    required: estimatedCredits
-                )
-                return TranscriptionPipelineOutcome(
-                    sourceText: localText,
-                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error),
-                    thaiDiagnostics: localDiagnostics
-                )
-            }
-
-            statusMessage = AppText.elevenLabsReviewing(videoURL.lastPathComponent)
-            let cloudTranscript = try await ElevenLabsTranscriber.transcribeThai(audioURL: audioURL, apiKey: apiKey)
-            let cloudText = organizeTranscript(cloudTranscript.text, language: language)
-            guard ElevenLabsTranscriber.isTrustedTeacher(cloudTranscript), !cloudText.isEmpty else {
-                let error = AppText.elevenLabsQualityRejected
-                return TranscriptionPipelineOutcome(
-                    sourceText: localText,
-                    sourceDescription: AppText.localWhisperCloudUnavailable(localDescription, reason: error),
-                    thaiDiagnostics: localDiagnostics
-                )
-            }
-
-            return TranscriptionPipelineOutcome(
-                sourceText: cloudText,
-                sourceDescription: AppText.elevenLabsSource(reasons: assessment.cloudReasons),
-                thaiDiagnostics: ThaiTranscriptionDiagnostics(
-                    segmentCount: localDiagnostics.segmentCount,
-                    generalReviewSegmentIndexes: localDiagnostics.generalReviewSegmentIndexes,
-                    usedFullGeneralReview: localDiagnostics.usedFullGeneralReview,
-                    cloudReasons: localDiagnostics.cloudReasons,
-                    usedElevenLabs: true
-                )
-            )
-        } catch {
-            return TranscriptionPipelineOutcome(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: error.localizedDescription
-                ),
-                thaiDiagnostics: localDiagnostics
-            )
-        }
-    }
-
-    /// 无口播兜底：尝试用视觉模型生成文案，否则显示提示
-    private func pipelineHandleNoSpeech(videoURL: URL, params: TranslationParams) async {
-        let visualSourceText = AppText.noEffectiveSpeech
-
-        if LLMTranslationService.supportsProductContextFrames(provider: params.provider, modelName: params.modelName) {
-            statusMessage = AppText.generatingVisualSalesCopy(videoURL.lastPathComponent)
-            let frameJPEGData = await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
-            if let visualCopy = try? await LLMTranslationService().generateVisualSalesCopy(
-                fileName: videoURL.lastPathComponent,
-                durationText: offlineVideoDurationText,
-                productContext: params.initialProductContext,
-                frameJPEGData: frameJPEGData,
-                provider: params.provider,
-                modelName: params.modelName,
-                customBaseURL: params.customBaseURL
-            ) {
-                let translatedText = "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)"
-                lines = [CaptionLine(
-                    sourceText: visualSourceText, translatedText: translatedText,
-                    translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
-                )]
-                saveOfflineVideoTranscript(sourceText: visualSourceText, translatedText: translatedText)
-                statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
-                return
-            }
-        }
-
-        lines = [CaptionLine(
-            sourceText: visualSourceText, translatedText: AppText.noEffectiveSpeechDescription,
-            translatedSourceText: visualSourceText, createdAt: Date(), isFinal: true
-        )]
-        statusMessage = AppText.noEffectiveSpeech
-    }
-
-    /// 商品类型推断：根据口播文本和视频帧推断商品类型
-    private func pipelineInferProductContext(
-        sourceText: String, videoURL: URL, language: LanguageOption, params: TranslationParams
-    ) async -> String {
-        var productContext = params.initialProductContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard params.shouldInferProductContext && productContext.isEmpty else { return productContext }
-
-        statusMessage = AppText.inferringProductContext(videoURL.lastPathComponent)
-        let frameJPEGData = LLMTranslationService.supportsProductContextFrames(
-            provider: params.provider, modelName: params.modelName
-        )
-            ? await OfflineVideoFrameExtractor.extractProductContextFrames(from: videoURL)
-            : []
-
-        if let inferredContext = try? await LLMTranslationService().inferProductContext(
-            from: sourceText,
-            fileName: videoURL.lastPathComponent,
-            frameJPEGData: frameJPEGData,
-            source: language,
-            provider: params.provider,
-            modelName: params.modelName,
-            customBaseURL: params.customBaseURL
-        ), !inferredContext.isEmpty, inferredContext != AppText.unknownProductContext {
-            productContext = inferredContext
-            offlineVideoProductContext = inferredContext
-        }
-
-        return productContext
-    }
-
-    /// 翻译：用 LLM 翻译转写文本
-    private func pipelineTranslate(
-        sourceText: String, language: LanguageOption,
-        productContext: String, videoURL: URL, params: TranslationParams
-    ) async throws -> String {
-        statusMessage = AppText.offlineVideoTranslating(videoURL.lastPathComponent, provider: params.provider.title)
-        return try await LLMTranslationService().translateShortVideoTranscript(
-            sourceText,
-            source: language,
-            target: params.target,
-            productContext: productContext,
-            provider: params.provider,
-            modelName: params.modelName,
-            customBaseURL: params.customBaseURL
-        )
+        let allowsCloudThaiTranscription: Bool
+        let allowsCloudVideoFrames: Bool
+        let allowsVisualSalesCopy: Bool
     }
 
     func clearProductContext() {
@@ -438,8 +285,11 @@ final class TranslationSessionStore {
     func saveTranslationAPIKey(_ key: String) {
         do {
             try TranslationAPIKeyStore.saveAPIKey(key, for: translationProvider)
-            hasTranslationAPIKey = true
+            translationAPIKeyAvailability = .configured
             statusMessage = AppText.translationAPIKeySaved(translationProvider.title)
+        } catch let error as TranslationAPIKeyStoreError {
+            translationAPIKeyAvailability = error.availability
+            statusMessage = error.localizedDescription
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -448,8 +298,11 @@ final class TranslationSessionStore {
     func removeTranslationAPIKey() {
         do {
             try TranslationAPIKeyStore.deleteAPIKey(for: translationProvider)
-            hasTranslationAPIKey = false
+            translationAPIKeyAvailability = .missing
             statusMessage = AppText.translationAPIKeyRemoved(translationProvider.title)
+        } catch let error as TranslationAPIKeyStoreError {
+            translationAPIKeyAvailability = error.availability
+            statusMessage = error.localizedDescription
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -458,8 +311,11 @@ final class TranslationSessionStore {
     func saveElevenLabsAPIKey(_ key: String) {
         do {
             try ElevenLabsAPIKeyStore.saveAPIKey(key)
-            hasElevenLabsAPIKey = true
+            elevenLabsAPIKeyAvailability = .configured
             statusMessage = AppText.elevenLabsAPIKeySaved
+        } catch let error as ElevenLabsAPIKeyStoreError {
+            elevenLabsAPIKeyAvailability = error.availability
+            statusMessage = error.localizedDescription
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -468,8 +324,11 @@ final class TranslationSessionStore {
     func removeElevenLabsAPIKey() {
         do {
             try ElevenLabsAPIKeyStore.deleteAPIKey()
-            hasElevenLabsAPIKey = false
+            elevenLabsAPIKeyAvailability = .missing
             statusMessage = AppText.elevenLabsAPIKeyRemoved
+        } catch let error as ElevenLabsAPIKeyStoreError {
+            elevenLabsAPIKeyAvailability = error.availability
+            statusMessage = error.localizedDescription
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -478,53 +337,32 @@ final class TranslationSessionStore {
     func openTranscriptsFolder() {
         do {
             try FileManager.default.createDirectory(
-                at: transcriptsDirectoryURL,
+                at: transcriptRepository.currentDirectoryURL,
                 withIntermediateDirectories: true
             )
-            NSWorkspace.shared.open(transcriptsDirectoryURL)
+            NSWorkspace.shared.open(transcriptRepository.currentDirectoryURL)
         } catch {
             statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
         }
     }
 
-    func loadSavedTranscripts() {
+    func clearDiagnostics() {
         do {
-            try FileManager.default.createDirectory(
-                at: transcriptsDirectoryURL,
-                withIntermediateDirectories: true
-            )
-            let fileURLs = try transcriptSearchDirectories().flatMap { directoryURL in
-                try FileManager.default.contentsOfDirectory(
-                    at: directoryURL,
-                    includingPropertiesForKeys: [.contentModificationDateKey],
-                    options: [.skipsHiddenFiles]
-                )
-            }
-            let originalFiles = fileURLs
-                .filter { $0.pathExtension == "txt" && $0.lastPathComponent.hasSuffix("_original.txt") }
-                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            try OfflineTranslationDiagnostics.clear()
+            statusMessage = AppText.diagnosticsCleared
+        } catch {
+            statusMessage = AppText.diagnosticsClearFailed(error.localizedDescription)
+        }
+    }
 
-            savedTranscripts = originalFiles.compactMap { originalURL in
-                let stem = String(originalURL.lastPathComponent.dropLast("_original.txt".count))
-                let translationURL = originalURL.deletingLastPathComponent().appendingPathComponent("\(stem)_translation.txt")
-                guard let sourceText = try? String(contentsOf: originalURL, encoding: .utf8),
-                      let translatedText = try? String(contentsOf: translationURL, encoding: .utf8)
-                else {
-                    return nil
-                }
-                let updatedAt = (try? originalURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
-                return SavedTranscript(
-                    id: stem,
-                    sourceFileURL: originalURL,
-                    translationFileURL: translationURL,
-                    sourceText: sourceText,
-                    translatedText: translatedText,
-                    updatedAt: updatedAt
-                )
-            }
-            savedTranscripts.sort { $0.updatedAt > $1.updatedAt }
+    @discardableResult
+    func loadSavedTranscripts() -> Bool {
+        do {
+            try reloadSavedTranscripts()
+            return true
         } catch {
             statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
+            return false
         }
     }
 
@@ -542,224 +380,96 @@ final class TranslationSessionStore {
 
     func saveSelectedTranscriptEdits() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
-        writeTranscriptText(savedDraftSourceText, to: selectedTranscript.sourceFileURL)
-        if let translationFileURL = selectedTranscript.translationFileURL {
-            writeTranscriptText(savedDraftTranslationText, to: translationFileURL)
+        guard !selectedTranscript.isLegacy else {
+            statusMessage = AppText.legacyTranscriptReadOnly
+            return
         }
-        loadSavedTranscripts()
+        do {
+            try transcriptRepository.saveEdits(
+                for: selectedTranscript,
+                sourceText: savedDraftSourceText,
+                translatedText: savedDraftTranslationText
+            )
+            statusMessage = AppText.savedEdits
+        } catch {
+            statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
+        }
+        _ = loadSavedTranscripts()
     }
 
     func deleteSelectedTranscript() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
-        try? FileManager.default.removeItem(at: selectedTranscript.sourceFileURL)
-        if let translationFileURL = selectedTranscript.translationFileURL {
-            try? FileManager.default.removeItem(at: translationFileURL)
+        guard !selectedTranscript.isLegacy else {
+            statusMessage = AppText.legacyTranscriptReadOnly
+            return
         }
-        selectedSavedTranscriptID = nil
-        savedDraftSourceText = ""
-        savedDraftTranslationText = ""
-        loadSavedTranscripts()
+        do {
+            try transcriptRepository.delete(selectedTranscript)
+            statusMessage = AppText.deletedSavedTranscript
+            selectedSavedTranscriptID = nil
+            savedDraftSourceText = ""
+            savedDraftTranslationText = ""
+        } catch {
+            statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
+        }
+        _ = loadSavedTranscripts()
     }
 
     func deleteAllSavedTranscripts() {
-        for transcript in savedTranscripts {
-            try? FileManager.default.removeItem(at: transcript.sourceFileURL)
-            if let translationFileURL = transcript.translationFileURL {
-                try? FileManager.default.removeItem(at: translationFileURL)
-            }
-        }
-        savedTranscripts.removeAll()
+        let failures = transcriptRepository.deleteAllCurrent(savedTranscripts)
         selectedSavedTranscriptID = nil
         savedDraftSourceText = ""
         savedDraftTranslationText = ""
+        guard loadSavedTranscripts() else { return }
+        statusMessage = failures == 0
+            ? AppText.deletedCurrentTranscripts
+            : AppText.deleteSomeTranscriptsFailed(failures)
     }
 
-    private func saveOfflineVideoTranscript(sourceText: String, translatedText: String) {
-        let updatedAt = Date()
-        let baseFileName = makeTranscriptFileName(for: sourceText, date: updatedAt)
-        let originalFileName = transcriptVariantFileName(baseFileName, suffix: "original")
-        let translationFileName = transcriptVariantFileName(baseFileName, suffix: "translation")
-
-        guard writeTranscriptText(sourceText, fileName: originalFileName),
-              writeTranscriptText(translatedText, fileName: translationFileName)
-        else {
-            return
-        }
-        loadSavedTranscripts()
-    }
-
-    @discardableResult
-    private func writeTranscriptText(_ text: String, fileName: String) -> Bool {
-        writeTranscriptText(text, to: transcriptURL(fileName: fileName))
-    }
-
-    @discardableResult
-    private func writeTranscriptText(_ text: String, to fileURL: URL) -> Bool {
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+    func importLegacyTranscripts() {
+        let legacyTranscripts = savedTranscripts.filter(\.isLegacy)
+        let result = transcriptRepository.importLegacy(legacyTranscripts)
+        guard loadSavedTranscripts() else { return }
+        statusMessage = result.imported == 0 && result.skipped == 0 && result.failed == 0
+            ? AppText.noLegacyTranscripts
+            : AppText.importedLegacyTranscripts(
+                imported: result.imported,
+                skipped: result.skipped,
+                failed: result.failed
             )
-            try text.write(to: fileURL, atomically: true, encoding: .utf8)
-            return true
-        } catch {
-            statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
-            return false
-        }
     }
 
-    private func makeTranscriptFileName(for text: String, date: Date) -> String {
-        let title = text
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "video"
-        let safeTitle = title
-            .replacingOccurrences(of: #"[^A-Za-z0-9가-힣一-龥ぁ-んァ-ン]+"#, with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return "\(formatter.string(from: date))-\(String(safeTitle.prefix(36))).txt"
-    }
-
-    private func transcriptVariantFileName(_ fileName: String, suffix: String) -> String {
-        let stem = fileName.hasSuffix(".txt") ? String(fileName.dropLast(4)) : fileName
-        return "\(stem)_\(suffix).txt"
-    }
-
-    private var transcriptsDirectoryURL: URL {
-        currentApplicationSupportDirectory.appendingPathComponent("Transcripts", isDirectory: true)
-    }
-
-    private var currentApplicationSupportDirectory: URL {
-        FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("VidLingo", isDirectory: true)
-    }
-
-    private var legacyTranscriptsDirectoryURL: URL {
-        FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("AirTranslate", isDirectory: true)
-            .appendingPathComponent("Transcripts", isDirectory: true)
-    }
-
-    private func transcriptURL(fileName: String) -> URL {
-        transcriptsDirectoryURL.appendingPathComponent(fileName)
-    }
-
-    private func transcriptSearchDirectories() -> [URL] {
-        let fileManager = FileManager.default
-        var directories = [transcriptsDirectoryURL]
-        if fileManager.fileExists(atPath: legacyTranscriptsDirectoryURL.path) {
-            directories.append(legacyTranscriptsDirectoryURL)
-        }
-        return directories
-    }
-
-    private func organizeTranscript(_ text: String, language: LanguageOption) -> String {
-        TranscriptTextProcessor.organizeTranscript(text, languageID: language.id)
-    }
-
-    private func localTranscriptionDescription(for assessment: LocalTranscriptionAssessment) -> String {
-        let profiles = assessment.segments.compactMap(\.selectedProfile)
-        let specialistCount = profiles.filter { $0 == .thaiSpecialistGreedy }.count
-        let generalCount = profiles.filter { $0 == .generalBeam }.count
-        return AppText.thaiLocalWhisperSource(
-            specialistSegments: specialistCount,
-            generalSegments: generalCount
+    @discardableResult
+    private func saveOfflineVideoTranscript(
+        sourceText: String,
+        translatedText: String,
+        sourceLanguage: LanguageOption?,
+        params: TranslationParams,
+        kind: TranscriptArtifactKind,
+        frameData: [Data] = [],
+        videoFileName: String
+    ) throws -> PublishedTranscriptArtifact {
+        let artifact = try transcriptRepository.publish(
+            sourceText: sourceText,
+            translatedText: translatedText,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: params.target,
+            provider: params.provider,
+            modelName: params.modelName,
+            videoFileName: videoFileName,
+            kind: kind,
+            frameData: frameData
         )
+        try reloadSavedTranscripts()
+        return artifact
     }
 
-    private func hasEffectiveSpeechTranscript(_ text: String, language: LanguageOption) -> Bool {
-        let normalizedText = text.lowercased()
-        let letterCount = normalizedText.unicodeScalars.filter {
-            CharacterSet.letters.contains($0)
-        }.count
-        guard letterCount >= 12 else { return false }
-
-        if usesUnspacedScript(language) {
-            // 无空格语言切不了词，但 Whisper 循环幻觉（如「ผัดกระเทียม」重复 8 次）
-            // 必须挡住，否则会把垃圾喂给翻译。用字符级重复检测兜底。
-            if containsKnownHallucination(in: normalizedText) { return false }
-            if isRepetitionLoop(normalizedText) { return false }
-            return true
-        }
-
-        let words = normalizedText
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
-        guard words.count >= 6 else { return false }
-
-        let uniqueWordRatio = Double(Set(words).count) / Double(words.count)
-        if uniqueWordRatio < 0.35 {
-            return false
-        }
-
-        let lines = normalizedText
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        if lines.count >= 3, Set(lines).count <= max(1, lines.count / 3) {
-            return false
-        }
-
-        if containsKnownHallucination(in: normalizedText) {
-            return false
-        }
-
-        return true
+    private func reloadSavedTranscripts() throws {
+        savedTranscripts = try transcriptRepository.load()
     }
 
-    private func usesUnspacedScript(_ language: LanguageOption) -> Bool {
-        ["th-TH", "zh-CN", "ja-JP"].contains(language.id)
-    }
-
-    /// 检测重复幻觉循环（针对无空格语言）：Whisper 卡住时会把同一短语重复几十遍。
-    private func isRepetitionLoop(_ text: String) -> Bool {
-        // 一、Whisper 循环时常在重复短语间插空格，先按空白切分判唯一率
-        let tokens = text.split { $0.isWhitespace }.map(String.init)
-        if tokens.count >= 6 {
-            let uniqueRatio = Double(Set(tokens).count) / Double(tokens.count)
-            if uniqueRatio < 0.35 { return true }
-        }
-        // 二、纯无空格的循环用字符三元组唯一率兜底（正常口播多样性远高于此）
-        let chars = Array(text)
-        if chars.count >= 18 {
-            var grams = Set<String>()
-            let total = chars.count - 2
-            for i in 0..<total {
-                grams.insert(String(chars[i..<i + 3]))
-            }
-            if Double(grams.count) / Double(total) < 0.25 { return true }
-        }
-        return false
-    }
-
-    private func containsKnownHallucination(in normalizedText: String) -> Bool {
-        let hallucinationPhrases = [
-            "*trips*",
-            "trips trips",
-            "do you know how to put the person in it",
-            "you can see the person in it",
-            "i can see the person in it"
-        ]
-        return hallucinationPhrases.contains(where: { normalizedText.contains($0) })
-    }
-
-    private static func formattedVideoDuration(for videoURL: URL) async -> String {
-        let asset = AVURLAsset(url: videoURL)
-        let duration = try? await asset.load(.duration)
-        let seconds = duration.map(CMTimeGetSeconds) ?? 0
-        guard seconds.isFinite, seconds > 0 else { return "" }
-        return String(format: "%d:%02d", Int(seconds.rounded()) / 60, Int(seconds.rounded()) % 60)
-    }
-
-    private static func audioDurationSeconds(for audioURL: URL) async -> Double {
-        let asset = AVURLAsset(url: audioURL)
-        guard let duration = try? await asset.load(.duration) else { return 0 }
-        let seconds = CMTimeGetSeconds(duration)
-        return seconds.isFinite && seconds > 0 ? seconds : 0
+    private func sanitizedErrorDescription(_ error: Error) -> String {
+        OfflineTranslationDiagnostics.sanitizedErrorDescription(error.localizedDescription)
     }
 
     private func restoreSelectedSettings() {
@@ -771,30 +481,44 @@ final class TranslationSessionStore {
            let language = LanguageOption.supported.first(where: { $0.id == sourceLanguageID }) {
             sourceLanguage = language
         }
-        if let targetLanguageID = defaults.string(forKey: SettingsKey.targetLanguageID),
-           let language = LanguageOption.supported.first(where: { $0.id == targetLanguageID }) {
-            targetLanguage = language
-        }
+        targetLanguage = LanguageOption.supported.first(where: { $0.id == "zh-CN" })
+            ?? LanguageOption(id: "zh-CN", title: "Chinese Simplified", locale: Locale(identifier: "zh-CN"))
         if defaults.object(forKey: SettingsKey.isSourceAutoDetectionEnabled) != nil {
             isSourceAutoDetectionEnabled = defaults.bool(forKey: SettingsKey.isSourceAutoDetectionEnabled)
         }
+        allowsCloudThaiTranscription = defaults.bool(forKey: SettingsKey.allowsCloudThaiTranscription)
+        allowsCloudVideoFrames = defaults.bool(forKey: SettingsKey.allowsCloudVideoFrames)
+        allowsVisualSalesCopy = defaults.bool(forKey: SettingsKey.allowsVisualSalesCopy)
         if let providerID = defaults.string(forKey: SettingsKey.translationProviderID),
            let provider = TranslationProviderID(rawValue: providerID) {
             translationProvider = provider
         }
-        customTranslationBaseURL = defaults.string(forKey: SettingsKey.customTranslationBaseURL) ?? ""
+        let storedCustomEndpoint = defaults.string(forKey: SettingsKey.customTranslationBaseURL) ?? ""
+        let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
+        customTranslationBaseURL = (try? EndpointValidator.validate(
+            storedCustomEndpoint,
+            allowLoopbackHTTP: allowLocalHTTP
+        ).url.absoluteString) ?? ""
         translationModelName = storedTranslationModelName(for: translationProvider)
-        hasTranslationAPIKey = TranslationAPIKeyStore.hasAPIKey(for: translationProvider)
+        translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: translationProvider)
+        elevenLabsAPIKeyAvailability = ElevenLabsAPIKeyStore.availability
     }
 
     private func persistSelectedSettings() {
         guard !isRestoringSelectedSettings else { return }
         let defaults = UserDefaults.standard
         defaults.set(sourceLanguage.id, forKey: SettingsKey.sourceLanguageID)
-        defaults.set(targetLanguage.id, forKey: SettingsKey.targetLanguageID)
         defaults.set(isSourceAutoDetectionEnabled, forKey: SettingsKey.isSourceAutoDetectionEnabled)
+        defaults.set(allowsCloudThaiTranscription, forKey: SettingsKey.allowsCloudThaiTranscription)
+        defaults.set(allowsCloudVideoFrames, forKey: SettingsKey.allowsCloudVideoFrames)
+        defaults.set(allowsVisualSalesCopy, forKey: SettingsKey.allowsVisualSalesCopy)
         defaults.set(translationProvider.rawValue, forKey: SettingsKey.translationProviderID)
-        defaults.set(customTranslationBaseURL, forKey: SettingsKey.customTranslationBaseURL)
+        let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
+        let persistedCustomEndpoint = (try? EndpointValidator.validate(
+            customTranslationBaseURL,
+            allowLoopbackHTTP: allowLocalHTTP
+        ).url.absoluteString) ?? ""
+        defaults.set(persistedCustomEndpoint, forKey: SettingsKey.customTranslationBaseURL)
     }
 
     private func persistTranslationModelName() {

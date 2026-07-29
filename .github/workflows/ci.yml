@@ -1,0 +1,30 @@
+name: Swift CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Check shell script and diff contracts
+        run: bash -n script/build_and_run.sh && git diff --check
+      - name: Build the app target
+        run: swift build
+      - name: Run Swift tests
+        run: swift test
+      - name: Build the application bundle
+        run: ./script/build_and_run.sh build
+      - name: Verify the application signature
+        run: /usr/bin/codesign --verify --deep --strict dist/VidLingo.app
+      - name: Ensure installation requires stable signing
+        run: |
+          if CODE_SIGN_IDENTITY= ./script/build_and_run.sh install; then
+            echo "install unexpectedly accepted an ad-hoc signing identity" >&2
+            exit 1
+          fi

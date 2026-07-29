@@ -12,7 +12,8 @@ struct CaptionBoardView: View {
             OfflineVideoImportPanel(
                 session: session,
                 importVideo: openOfflineVideoPanel,
-                startTranslation: session.startOfflineVideoTranslation
+                startTranslation: session.startOfflineVideoTranslation,
+                cancelTranslation: session.cancelOfflineVideoTranslation
             )
 
             TranscriptResultView(session: session)
@@ -37,6 +38,7 @@ private struct OfflineVideoImportPanel: View {
     @Bindable var session: TranslationSessionStore
     let importVideo: () -> Void
     let startTranslation: () -> Void
+    let cancelTranslation: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -59,7 +61,12 @@ private struct OfflineVideoImportPanel: View {
                 Spacer(minLength: 12)
 
                 if session.isOfflineVideoProcessing {
-                    ProcessingStatusPill(text: AppText.processing)
+                    HStack(spacing: 8) {
+                        ProcessingStatusPill(text: AppText.processing)
+                        Button(AppText.cancelProcessing, role: .cancel, action: cancelTranslation)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
                 } else {
                     Button(action: importVideo) {
                         Label(AppText.importVideo, systemImage: "plus.rectangle.on.folder")
@@ -93,13 +100,33 @@ private struct OfflineVideoImportPanel: View {
                 .disabled(session.isOfflineVideoProcessing)
                 .help(AppText.inferringProductContextHelp)
 
+            if session.offlineVideoURL != nil, !session.isOfflineVideoProcessing {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(AppText.executionPlanTitle)
+                        .font(.caption.weight(.semibold))
+                    Text(session.offlineVideoExecutionPlan)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 2)
+            }
+
+            if let warning = session.offlineTranslationConfigurationWarning,
+               session.offlineVideoURL != nil,
+               !session.isOfflineVideoProcessing {
+                Text(warning)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
             if let videoURL = session.offlineVideoURL {
                 OfflineVideoPreviewCard(
                     videoURL: videoURL,
                     fileName: session.offlineVideoFileName,
                     durationText: session.offlineVideoDurationText,
                     isProcessing: session.isOfflineVideoProcessing,
-                    canStartTranslation: !session.isOfflineVideoProcessing,
+                    canStartTranslation: session.canStartOfflineVideoTranslation,
                     startTranslation: startTranslation
                 )
             }

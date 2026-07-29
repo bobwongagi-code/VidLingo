@@ -19,6 +19,14 @@ let package = Package(
                 .linkedFramework("AVKit"),
                 .linkedFramework("Security")
             ]
+        ),
+        .testTarget(
+            name: "VidLingoCoreTests",
+            dependencies: ["VidLingoCore"]
+        ),
+        .testTarget(
+            name: "VidLingoTests",
+            dependencies: ["VidLingo", "VidLingoCore"]
         )
     ]
 )

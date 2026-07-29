@@ -3,22 +3,51 @@ import AVFoundation
 import Foundation
 
 enum OfflineVideoFrameExtractor {
-    static func extractProductContextFrames(from videoURL: URL) async -> [Data] {
-        await Task.detached(priority: .utility) {
+    static func extractProductContextFrames(
+        from videoURL: URL,
+        token: ProcessCancellationToken
+    ) async throws -> [Data] {
+        try await Task.detached(priority: .utility) {
+            try token.check()
             let asset = AVURLAsset(url: videoURL)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 640, height: 640)
+            let generatorBox = ImageGeneratorBox(AVAssetImageGenerator(asset: asset))
+            generatorBox.generator.appliesPreferredTrackTransform = true
+            generatorBox.generator.maximumSize = CGSize(width: 640, height: 640)
 
-            let duration = (try? await asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
+            let duration: Double
+            do {
+                let loadedDuration = try await withTaskCancellationHandler {
+                    try await AsyncOperationTimeout.run(timeout: 15) {
+                        try await asset.load(.duration)
+                    }
+                } onCancel: {
+                    asset.cancelLoading()
+                }
+                duration = CMTimeGetSeconds(loadedDuration)
+            } catch ProcessSupervisorError.cancelled {
+                throw ProcessSupervisorError.cancelled
+            } catch ProcessSupervisorError.deadlineExceeded {
+                throw ProcessSupervisorError.deadlineExceeded
+            } catch {
+                return []
+            }
             let seconds = frameTimes(forDuration: duration)
             var frames = [Data]()
 
             for second in seconds {
+                try token.check()
                 let time = CMTime(seconds: second, preferredTimescale: 600)
-                if let cgImage = await cgImage(from: generator, at: time),
-                   let data = jpegData(from: cgImage) {
-                    frames.append(data)
+                do {
+                    if let cgImage = try await cgImage(from: generatorBox, at: time),
+                       let data = jpegData(from: cgImage) {
+                        frames.append(data)
+                    }
+                } catch ProcessSupervisorError.cancelled {
+                    throw ProcessSupervisorError.cancelled
+                } catch ProcessSupervisorError.deadlineExceeded {
+                    throw ProcessSupervisorError.deadlineExceeded
+                } catch {
+                    // 单帧读取失败不阻断其他时间点，避免视觉增强拖垮主流程。
                 }
             }
             return frames
@@ -46,8 +75,22 @@ enum OfflineVideoFrameExtractor {
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.72])
     }
 
-    private static func cgImage(from generator: AVAssetImageGenerator, at time: CMTime) async -> CGImage? {
-        guard let result = try? await generator.image(at: time) else { return nil }
-        return result.image
+    private static func cgImage(from generatorBox: ImageGeneratorBox, at time: CMTime) async throws -> CGImage? {
+        try await withTaskCancellationHandler {
+            let result = try await AsyncOperationTimeout.run(timeout: 8) {
+                try await generatorBox.generator.image(at: time)
+            }
+            return result.image
+        } onCancel: {
+            generatorBox.generator.cancelAllCGImageGeneration()
+        }
+    }
+
+    private final class ImageGeneratorBox: @unchecked Sendable {
+        let generator: AVAssetImageGenerator
+
+        init(_ generator: AVAssetImageGenerator) {
+            self.generator = generator
+        }
     }
 }

@@ -39,13 +39,15 @@ enum ElevenLabsTranscriber {
         return Int(ceil(baseEstimate * 1.15)) + 10
     }
 
-    static func quota(apiKey: String) async throws -> ElevenLabsQuota {
+    static func quota(apiKey: String, token: ProcessCancellationToken) async throws -> ElevenLabsQuota {
+        try token.check()
         var request = URLRequest(url: subscriptionEndpoint)
         request.httpMethod = "GET"
         request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
         let payload = try JSONDecoder().decode(SubscriptionResponse.self, from: data)
+        try token.check()
         return ElevenLabsQuota(
             tier: payload.tier,
             usedCredits: payload.characterCount,
@@ -54,34 +56,56 @@ enum ElevenLabsTranscriber {
         )
     }
 
-    static func transcribeThai(audioURL: URL, apiKey: String) async throws -> ElevenLabsTranscript {
-        let audioData = try Data(contentsOf: audioURL)
+    static func transcribeThai(
+        audioURL: URL,
+        apiKey: String,
+        token: ProcessCancellationToken
+    ) async throws -> ElevenLabsTranscript {
+        try token.check()
         let boundary = "VidLingo-\(UUID().uuidString)"
-        var body = Data()
-        body.appendMultipartField(name: "model_id", value: modelID, boundary: boundary)
-        body.appendMultipartField(name: "language_code", value: "tha", boundary: boundary)
-        body.appendMultipartField(name: "timestamps_granularity", value: "word", boundary: boundary)
-        body.appendMultipartField(name: "diarize", value: "false", boundary: boundary)
-        body.appendMultipartField(name: "tag_audio_events", value: "false", boundary: boundary)
-        body.appendMultipartField(name: "no_verbatim", value: "false", boundary: boundary)
-        body.appendMultipartField(name: "temperature", value: "0", boundary: boundary)
-        body.appendMultipartFile(
-            name: "file",
-            fileName: "speech.wav",
-            mimeType: "audio/wav",
-            data: audioData,
-            boundary: boundary
-        )
-        body.appendString("--\(boundary)--\r\n")
+        let uploadURL = audioURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("elevenlabs-\(UUID().uuidString).multipart")
+        var prefix = Data()
+        prefix.appendMultipartField(name: "model_id", value: modelID, boundary: boundary)
+        prefix.appendMultipartField(name: "language_code", value: "tha", boundary: boundary)
+        prefix.appendMultipartField(name: "timestamps_granularity", value: "word", boundary: boundary)
+        prefix.appendMultipartField(name: "diarize", value: "false", boundary: boundary)
+        prefix.appendMultipartField(name: "tag_audio_events", value: "false", boundary: boundary)
+        prefix.appendMultipartField(name: "no_verbatim", value: "false", boundary: boundary)
+        prefix.appendMultipartField(name: "temperature", value: "0", boundary: boundary)
+        prefix.appendString("--\(boundary)\r\n")
+        prefix.appendString("Content-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n")
+        prefix.appendString("Content-Type: audio/wav\r\n\r\n")
+        try prefix.write(to: uploadURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: uploadURL) }
+        let uploadHandle = try FileHandle(forWritingTo: uploadURL)
+        defer {
+            try? uploadHandle.close()
+        }
+        try uploadHandle.seekToEnd()
+        let audioHandle = try FileHandle(forReadingFrom: audioURL)
+        defer { try? audioHandle.close() }
+        while let chunk = try audioHandle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            try token.check()
+            try uploadHandle.write(contentsOf: chunk)
+        }
+        try uploadHandle.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
+        try uploadHandle.close()
+        let contentLength = (try uploadURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(String.init)
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 180
         request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
+        if let contentLength {
+            request.setValue(contentLength, forHTTPHeaderField: "Content-Length")
+        }
+        request.httpBodyStream = InputStream(fileAtPath: uploadURL.path)
 
         let (data, response) = try await session.data(for: request)
+        try token.check()
         try validate(response: response, data: data)
         let payload = try JSONDecoder().decode(TranscriptResponse.self, from: data)
         let requestID = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "request-id")
@@ -182,19 +206,6 @@ private extension Data {
         appendString("\(value)\r\n")
     }
 
-    mutating func appendMultipartFile(
-        name: String,
-        fileName: String,
-        mimeType: String,
-        data: Data,
-        boundary: String
-    ) {
-        appendString("--\(boundary)\r\n")
-        appendString("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(fileName)\"\r\n")
-        appendString("Content-Type: \(mimeType)\r\n\r\n")
-        append(data)
-        appendString("\r\n")
-    }
 }
 
 enum ElevenLabsError: LocalizedError {
@@ -204,9 +215,10 @@ enum ElevenLabsError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "ElevenLabs 返回了无效响应。"
+            return "ElevenLabs 返回了无效响应。"
         case let .requestFailed(statusCode, detail):
-            "ElevenLabs 请求失败（\(statusCode)）\(detail.map { "：\($0)" } ?? "")"
+            let safeDetail = detail.map(OfflineTranslationDiagnostics.sanitizedErrorDescription)
+            return "ElevenLabs 请求失败（\(statusCode)）\(safeDetail.map { "：\($0)" } ?? "")"
         }
     }
 }

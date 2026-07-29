@@ -6,8 +6,20 @@ enum TranslationAPIKeyStore {
     private static let legacyAccount = "OPENAI_API_KEY"
 
     static func hasAPIKey(for provider: TranslationProviderID) -> Bool {
-        guard let key = try? readAPIKey(for: provider) else { return false }
-        return !key.isEmpty
+        availability(for: provider) == .configured
+    }
+
+    static func availability(for provider: TranslationProviderID) -> KeychainAvailability {
+        do {
+            guard let key = try readAPIKey(for: provider), !key.isEmpty else {
+                return .missing
+            }
+            return .configured
+        } catch let error as TranslationAPIKeyStoreError {
+            return error.availability
+        } catch {
+            return .corrupted
+        }
     }
 
     static func readAPIKey(for provider: TranslationProviderID) throws -> String? {
@@ -43,15 +55,24 @@ enum TranslationAPIKeyStore {
             throw TranslationAPIKeyStoreError.invalidStoredKey
         }
 
-        SecItemDelete(baseQuery(service: provider.keychainService, account: account) as CFDictionary)
+        let query = baseQuery(service: provider.keychainService, account: account)
+        let updateStatus = SecItemUpdate(
+            query as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw TranslationAPIKeyStoreError.keychainStatus(updateStatus)
+        }
 
-        var query = baseQuery(service: provider.keychainService, account: account)
-        query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw TranslationAPIKeyStoreError.keychainStatus(status)
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw TranslationAPIKeyStoreError.keychainStatus(addStatus)
         }
     }
 
@@ -65,11 +86,17 @@ enum TranslationAPIKeyStore {
     }
 
     private static func keychainLookups(for provider: TranslationProviderID) -> [(service: String, account: String)] {
-        [
+        let currentLookups = [
             (provider.keychainService, account),
             (provider.keychainService, legacyAccount)
         ]
-            + provider.legacyKeychainServices.map { ($0, legacyAccount) }
+        let legacyLookups = provider.legacyKeychainServices.flatMap { service in
+            [
+                (service, account),
+                (service, legacyAccount)
+            ]
+        }
+        return currentLookups + legacyLookups
     }
 
     private static func baseQuery(service: String, account: String) -> [String: Any] {
@@ -85,6 +112,15 @@ enum TranslationAPIKeyStoreError: LocalizedError {
     case emptyKey
     case invalidStoredKey
     case keychainStatus(OSStatus)
+
+    var availability: KeychainAvailability {
+        switch self {
+        case .emptyKey, .invalidStoredKey:
+            .corrupted
+        case let .keychainStatus(status):
+            KeychainAvailability.from(status: status)
+        }
+    }
 
     var errorDescription: String? {
         switch self {

@@ -1,4 +1,5 @@
 import Foundation
+import VidLingoCore
 
 actor LLMTranslationService {
     private enum RequestTimeout {
@@ -6,18 +7,18 @@ actor LLMTranslationService {
         static let transcriptTranslation: TimeInterval = 240
         static let visualAnalysis: TimeInterval = 120
         static let visualSalesCopy: TimeInterval = 180
-        static let resource: TimeInterval = 300
     }
-
-    private static let session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = RequestTimeout.transcriptTranslation
-        configuration.timeoutIntervalForResource = RequestTimeout.resource
-        return URLSession(configuration: configuration)
-    }()
 
     static func supportsProductContextFrames(provider: TranslationProviderID, modelName: String) -> Bool {
         productContextVisionModel(provider: provider, currentModel: modelName) != nil
+    }
+
+    static func isTranslationOnlyModel(provider: TranslationProviderID, modelName: String) -> Bool {
+        provider.capabilities(for: modelName).isTranslationOnly
+    }
+
+    private func adapter(for provider: TranslationProviderID) -> any LLMProviderAdapter {
+        LLMProviderAdapterFactory.make(for: provider)
     }
 
     // MARK: - 公共校验和请求构建
@@ -36,8 +37,14 @@ actor LLMTranslationService {
         }
 
         let endpointText = provider == .custom ? customBaseURL : provider.defaultBaseURL
-        guard let endpoint = URL(string: endpointText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              endpoint.scheme?.hasPrefix("http") == true else {
+        let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
+        let endpoint: URL
+        do {
+            endpoint = try EndpointValidator.validate(
+                endpointText,
+                allowLoopbackHTTP: provider == .custom && allowLocalHTTP
+            ).url
+        } catch {
             throw LLMTranslationError.invalidEndpoint
         }
 
@@ -45,7 +52,12 @@ actor LLMTranslationService {
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if provider.usesAnthropicMessagesAPI {
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        } else {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         return (request, model)
     }
 
@@ -58,35 +70,55 @@ actor LLMTranslationService {
         source: LanguageOption,
         provider: TranslationProviderID,
         modelName: String,
-        customBaseURL: String
+        customBaseURL: String,
+        token: ProcessCancellationToken
     ) async throws -> String {
         guard !text.isEmpty else { return "" }
+        guard !Self.isTranslationOnlyModel(provider: provider, modelName: modelName) else {
+            return ""
+        }
+        try token.check()
 
-        var (request, model) = try preparedRequest(
+        let (request, model) = try preparedRequest(
             provider: provider,
             modelName: modelName,
             customBaseURL: customBaseURL,
             timeout: RequestTimeout.productContext
         )
         let prompt = productContextPrompt(text, fileName: fileName, source: source)
+        let adapter = adapter(for: provider)
 
         // 优先尝试视觉模型，失败则 fallback 到纯文本
         let visionModel = Self.productContextVisionModel(provider: provider, currentModel: model)
         if let visionModel, !frameJPEGData.isEmpty {
-            request.httpBody = try JSONEncoder().encode(
-                visionProductContextRequest(prompt: prompt, frameJPEGData: frameJPEGData, model: visionModel)
-            )
             do {
-                return sanitizeProductContext(try await sendChatCompletionRequest(request, provider: provider))
-            } catch is LLMTranslationError {
-                // vision 失败，继续用纯文本
+                let output: String
+                output = try await adapter.sendVision(
+                    request: request,
+                    model: visionModel,
+                    system: productContextSystemPrompt,
+                    userText: prompt,
+                    frameJPEGData: frameJPEGData,
+                    options: LLMGenerationOptions(temperature: 0.1, maxTokens: 80, maxFrameCount: 3),
+                    provider: provider
+                )
+                try token.check()
+                return sanitizeProductContext(output)
+            } catch let error as LLMTranslationError where error.allowsVisionFallback {
+                // 仅对明确的视觉能力或 schema 不兼容降级，鉴权、额度和超时直接返回。
             }
         }
 
-        request.httpBody = try JSONEncoder().encode(
-            productContextRequest(prompt: prompt, source: source, provider: provider, model: model)
+        let output = try await adapter.sendText(
+            request: request,
+            model: model,
+            system: productContextSystemPrompt,
+            userText: prompt,
+            options: LLMGenerationOptions(temperature: 0.1, maxTokens: 80),
+            provider: provider
         )
-        return sanitizeProductContext(try await sendChatCompletionRequest(request, provider: provider))
+        try token.check()
+        return sanitizeProductContext(output)
     }
 
     func translateShortVideoTranscript(
@@ -96,20 +128,36 @@ actor LLMTranslationService {
         productContext: String,
         provider: TranslationProviderID,
         modelName: String,
-        customBaseURL: String
+        customBaseURL: String,
+        token: ProcessCancellationToken
     ) async throws -> String {
         guard !text.isEmpty else { return text }
+        try token.check()
 
-        var (request, model) = try preparedRequest(
+        let (request, model) = try preparedRequest(
             provider: provider,
             modelName: modelName,
             customBaseURL: customBaseURL,
             timeout: RequestTimeout.transcriptTranslation
         )
-        request.httpBody = try JSONEncoder().encode(
-            chatCompletionRequest(text, source: source, target: target, productContext: productContext, provider: provider, model: model)
+        let translationRequest = translationRequestConfiguration(
+            text,
+            source: source,
+            target: target,
+            productContext: productContext,
+            provider: provider,
+            modelName: model
         )
-        return try await sendChatCompletionRequest(request, provider: provider)
+        let output = try await adapter(for: provider).sendText(
+            request: request,
+            model: model,
+            system: translationRequest.system,
+            userText: translationRequest.userText,
+            options: translationRequest.options,
+            provider: provider
+        )
+        try token.check()
+        return output
     }
 
     func generateVisualSalesCopy(
@@ -119,9 +167,11 @@ actor LLMTranslationService {
         frameJPEGData: [Data],
         provider: TranslationProviderID,
         modelName: String,
-        customBaseURL: String
+        customBaseURL: String,
+        token: ProcessCancellationToken
     ) async throws -> String {
         guard !frameJPEGData.isEmpty else { throw LLMTranslationError.visualFramesMissing }
+        try token.check()
 
         var (request, model) = try preparedRequest(
             provider: provider,
@@ -134,214 +184,81 @@ actor LLMTranslationService {
         }
 
         // 第一轮：视频画面分析
-        request.httpBody = try JSONEncoder().encode(
-            visionVideoAnalysisRequest(prompt: visualVideoAnalysisPrompt(fileName: fileName), frameJPEGData: frameJPEGData, model: visionModel)
-        )
-        let analysis = try parseVisualVideoAnalysis(from: try await sendChatCompletionRequest(request, provider: provider))
+        let analysisResponse: String
+        do {
+            analysisResponse = try await adapter(for: provider).sendVision(
+                request: request,
+                model: visionModel,
+                system: visualAnalysisSystemPrompt,
+                userText: visualVideoAnalysisPrompt(fileName: fileName),
+                frameJPEGData: frameJPEGData,
+                options: LLMGenerationOptions(temperature: 0.1, maxTokens: 360, maxFrameCount: 12),
+                provider: provider
+            )
+        } catch let error as LLMTranslationError {
+            switch error {
+            case .emptyOutput, .invalidResponse:
+                throw LLMTranslationError.visualResponseInvalid
+            default:
+                throw error
+            }
+        }
+        try token.check()
+        let analysis = try parseVisualVideoAnalysis(from: analysisResponse)
 
         // 第二轮：生成口播文案
         request.timeoutInterval = RequestTimeout.visualSalesCopy
-        request.httpBody = try JSONEncoder().encode(
-            visionSalesCopyRequest(
-                prompt: visualSalesCopyPrompt(fileName: fileName, durationText: durationText, productContext: productContext, analysis: analysis),
-                frameJPEGData: frameJPEGData,
-                model: visionModel
-            )
+        let salesCopyPrompt = visualSalesCopyPrompt(
+            fileName: fileName,
+            durationText: durationText,
+            productContext: productContext,
+            analysis: analysis
         )
-        return try await sendChatCompletionRequest(request, provider: provider)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func sendChatCompletionRequest(
-        _ request: URLRequest,
-        provider: TranslationProviderID
-    ) async throws -> String {
-        let data: Data
-        let response: URLResponse
+        let output: String
         do {
-            (data, response) = try await Self.session.data(for: request)
-        } catch let error as URLError where error.code == .timedOut {
-            throw LLMTranslationError.requestTimedOut(provider: provider.title)
-        }
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMTranslationError.invalidResponse
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let errorResponse = try? JSONDecoder().decode(ChatErrorResponse.self, from: data)
-            throw LLMTranslationError.requestFailed(
-                provider: provider.title,
-                statusCode: httpResponse.statusCode,
-                message: errorResponse?.error.message
+            output = try await adapter(for: provider).sendVision(
+                request: request,
+                model: visionModel,
+                system: visualSalesCopySystemPrompt,
+                userText: salesCopyPrompt,
+                frameJPEGData: frameJPEGData,
+                options: LLMGenerationOptions(temperature: 0.35, maxTokens: 520, maxFrameCount: 12),
+                provider: provider
             )
+        } catch let error as LLMTranslationError {
+            switch error {
+            case .emptyOutput, .invalidResponse:
+                throw LLMTranslationError.visualResponseInvalid
+            default:
+                throw error
+            }
         }
-
-        let outputText = try JSONDecoder()
-            .decode(ChatCompletionResponse.self, from: data)
-            .firstOutputText?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !outputText.isEmpty else {
-            throw LLMTranslationError.emptyOutput(provider.title)
-        }
-        return outputText
+        try token.check()
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func productContextRequest(
-        prompt: String,
-        source: LanguageOption,
-        provider: TranslationProviderID,
-        model: String
-    ) -> ChatCompletionRequest {
-        if provider == .qwen, model.lowercased().hasPrefix("qwen-mt-") {
-            return ChatCompletionRequest(
-                model: model,
-                messages: [
-                    ChatMessage(role: "user", content: prompt)
-                ],
-                stream: false,
-                temperature: nil,
-                maxTokens: nil,
-                translationOptions: TranslationOptions(
-                    sourceLanguage: "auto",
-                    targetLanguage: "Chinese",
-                    terms: nil,
-                    domains: "Infer the product category from a short e-commerce video transcript. Output one concise Chinese category label only.",
-                    translationMemory: nil
-                )
-            )
-        }
-
-        return ChatCompletionRequest(
-            model: model,
-            messages: [
-                ChatMessage(role: "system", content: productContextSystemPrompt),
-                ChatMessage(role: "user", content: prompt)
-            ],
-            stream: false,
-            temperature: 0.1,
-            maxTokens: 80,
-            translationOptions: nil
-        )
-    }
-
-    private func visionProductContextRequest(
-        prompt: String,
-        frameJPEGData: [Data],
-        model: String
-    ) -> VisionChatCompletionRequest {
-        let imageContents = frameJPEGData.prefix(3).map { data in
-            VisionContent(
-                type: "image_url",
-                text: nil,
-                imageURL: VisionImageURL(url: "data:image/jpeg;base64,\(data.base64EncodedString())")
-            )
-        }
-        return VisionChatCompletionRequest(
-            model: model,
-            messages: [
-                VisionChatMessage(
-                    role: "system",
-                    content: [
-                        VisionContent(type: "text", text: productContextSystemPrompt, imageURL: nil)
-                    ]
-                ),
-                VisionChatMessage(
-                    role: "user",
-                    content: [
-                        VisionContent(type: "text", text: prompt, imageURL: nil)
-                    ] + imageContents
-                )
-            ],
-            stream: false,
-            temperature: 0.1,
-            maxTokens: 80
-        )
-    }
-
-    private func visionSalesCopyRequest(
-        prompt: String,
-        frameJPEGData: [Data],
-        model: String
-    ) -> VisionChatCompletionRequest {
-        let imageContents = frameJPEGData.prefix(12).map { data in
-            VisionContent(
-                type: "image_url",
-                text: nil,
-                imageURL: VisionImageURL(url: "data:image/jpeg;base64,\(data.base64EncodedString())")
-            )
-        }
-        return VisionChatCompletionRequest(
-            model: model,
-            messages: [
-                VisionChatMessage(
-                    role: "system",
-                    content: [
-                        VisionContent(type: "text", text: visualSalesCopySystemPrompt, imageURL: nil)
-                    ]
-                ),
-                VisionChatMessage(
-                    role: "user",
-                    content: [
-                        VisionContent(type: "text", text: prompt, imageURL: nil)
-                    ] + imageContents
-                )
-            ],
-            stream: false,
-            temperature: 0.35,
-            maxTokens: 520
-        )
-    }
-
-    private func visionVideoAnalysisRequest(
-        prompt: String,
-        frameJPEGData: [Data],
-        model: String
-    ) -> VisionChatCompletionRequest {
-        let imageContents = frameJPEGData.prefix(12).map { data in
-            VisionContent(
-                type: "image_url",
-                text: nil,
-                imageURL: VisionImageURL(url: "data:image/jpeg;base64,\(data.base64EncodedString())")
-            )
-        }
-        return VisionChatCompletionRequest(
-            model: model,
-            messages: [
-                VisionChatMessage(
-                    role: "user",
-                    content: [
-                        VisionContent(type: "text", text: prompt, imageURL: nil)
-                    ] + imageContents
-                )
-            ],
-            stream: false,
-            temperature: 0.1,
-            maxTokens: 360
-        )
-    }
-
-    private func chatCompletionRequest(
+    private func translationRequestConfiguration(
         _ text: String,
         source: LanguageOption,
         target: LanguageOption,
         productContext: String,
         provider: TranslationProviderID,
-        model: String
-    ) -> ChatCompletionRequest {
-        if provider == .qwen, model.lowercased().hasPrefix("qwen-mt-") {
-            return ChatCompletionRequest(
-                model: model,
-                messages: [
-                    ChatMessage(role: "user", content: text)
-                ],
-                stream: false,
-                temperature: nil,
-                maxTokens: nil,
-                translationOptions: TranslationOptions(
+        modelName: String
+    ) -> (system: String, userText: String, options: LLMGenerationOptions) {
+        if provider == .qwen, modelName.lowercased().hasPrefix("qwen-mt-") {
+            return (
+                system: "",
+                userText: text,
+                options: LLMGenerationOptions(
+                    temperature: nil,
+                    maxTokens: 2_500,
+                    translationOptions: TranslationOptions(
                     sourceLanguage: "auto",
-                    targetLanguage: qwenMTLanguageName(for: target),
+                    targetLanguage: "Chinese",
                     terms: qwenMTTerms,
                     domains: qwenMTDomainPrompt(productContext),
                     translationMemory: qwenMTTranslationMemory
+                    )
                 )
             )
         }
@@ -362,44 +279,11 @@ actor LLMTranslationService {
         \(text)
         """
 
-        return ChatCompletionRequest(
-            model: model,
-            messages: [
-                ChatMessage(role: "system", content: systemPrompt),
-                ChatMessage(role: "user", content: userPrompt)
-            ],
-            stream: false,
-            temperature: 0.2,
-            maxTokens: 2500,
-            translationOptions: nil
+        return (
+            system: systemPrompt,
+            userText: userPrompt,
+            options: LLMGenerationOptions(temperature: 0.2, maxTokens: 2_500)
         )
-    }
-
-    private func qwenMTLanguageName(for language: LanguageOption) -> String {
-        switch language.id {
-        case "zh-CN":
-            "Chinese"
-        case "en-US":
-            "English"
-        case "ms-MY":
-            "Malay"
-        case "id-ID":
-            "Indonesian"
-        case "th-TH":
-            "Thai"
-        case "ko-KR":
-            "Korean"
-        case "ja-JP":
-            "Japanese"
-        case "es-ES":
-            "Spanish"
-        case "fr-FR":
-            "French"
-        case "de-DE":
-            "German"
-        default:
-            language.title
-        }
     }
 
     private func productContextPrompt(_ text: String, fileName: String, source: LanguageOption) -> String {
@@ -506,22 +390,52 @@ actor LLMTranslationService {
         """
     }
 
+    private var visualAnalysisSystemPrompt: String {
+        "你是一个短视频分析助手。只根据截图中能确认的内容回答，不要猜测品牌、价格、功效或参数。"
+    }
+
     private func parseVisualVideoAnalysis(from text: String) throws -> VisualVideoAnalysis {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let jsonText = extractJSONObject(from: trimmedText) ?? trimmedText
         guard let data = jsonText.data(using: .utf8) else {
-            throw LLMTranslationError.invalidResponse
+            throw LLMTranslationError.visualResponseInvalid
         }
-        return try JSONDecoder().decode(VisualVideoAnalysis.self, from: data)
+        do {
+            return try JSONDecoder().decode(VisualVideoAnalysis.self, from: data)
+        } catch {
+            throw LLMTranslationError.visualResponseInvalid
+        }
     }
 
     private func extractJSONObject(from text: String) -> String? {
-        guard let start = text.firstIndex(of: "{"),
-              let end = text.lastIndex(of: "}"),
-              start <= end else {
-            return nil
+        guard let start = text.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var isInsideString = false
+        var isEscaped = false
+        var index = start
+        while index < text.endIndex {
+            let character = text[index]
+            if isInsideString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == "\"" {
+                    isInsideString = false
+                }
+            } else if character == "\"" {
+                isInsideString = true
+            } else if character == "{" {
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return String(text[start...index])
+                }
+            }
+            index = text.index(after: index)
         }
-        return String(text[start...end])
+        return nil
     }
 
     private func sanitizeProductContext(_ text: String) -> String {
@@ -535,18 +449,7 @@ actor LLMTranslationService {
     }
 
     private static func productContextVisionModel(provider: TranslationProviderID, currentModel model: String) -> String? {
-        let normalizedModel = model.lowercased()
-        switch provider {
-        case .qwen:
-            return "qwen-vl-plus"
-        case .openAI:
-            let supportsVision = normalizedModel.contains("gpt-4o")
-                || normalizedModel.contains("gpt-4.1")
-                || normalizedModel.contains("gpt-5")
-            return supportsVision ? model : nil
-        case .custom, .deepSeek, .claudeCompatible:
-            return nil
-        }
+        provider.capabilities(for: model).supportsVision ? model : nil
     }
 
     private func qwenMTDomainPrompt(_ productContext: String) -> String? {
@@ -673,151 +576,10 @@ actor LLMTranslationService {
     }
 }
 
-private struct ChatCompletionRequest: Encodable {
-    let model: String
-    let messages: [ChatMessage]
-    let stream: Bool
-    let temperature: Double?
-    let maxTokens: Int?
-    let translationOptions: TranslationOptions?
-
-    private enum CodingKeys: String, CodingKey {
-        case model
-        case messages
-        case stream
-        case temperature
-        case maxTokens = "max_tokens"
-        case translationOptions = "translation_options"
-    }
-}
-
-private struct TranslationOptions: Encodable {
-    let sourceLanguage: String
-    let targetLanguage: String
-    let terms: [TranslationTerm]?
-    let domains: String?
-    let translationMemory: [TranslationMemoryEntry]?
-
-    private enum CodingKeys: String, CodingKey {
-        case sourceLanguage = "source_lang"
-        case targetLanguage = "target_lang"
-        case terms
-        case domains
-        case translationMemory = "tm_list"
-    }
-}
-
-private struct TranslationTerm: Encodable {
-    let source: String
-    let target: String
-}
-
-private struct TranslationMemoryEntry: Encodable {
-    let source: String
-    let target: String
-}
-
-private struct VisionChatCompletionRequest: Encodable {
-    let model: String
-    let messages: [VisionChatMessage]
-    let stream: Bool
-    let temperature: Double?
-    let maxTokens: Int?
-
-    private enum CodingKeys: String, CodingKey {
-        case model
-        case messages
-        case stream
-        case temperature
-        case maxTokens = "max_tokens"
-    }
-}
-
-private struct VisionChatMessage: Encodable {
-    let role: String
-    let content: [VisionContent]
-}
-
-private struct VisionContent: Encodable {
-    let type: String
-    let text: String?
-    let imageURL: VisionImageURL?
-
-    private enum CodingKeys: String, CodingKey {
-        case type
-        case text
-        case imageURL = "image_url"
-    }
-}
-
-private struct VisionImageURL: Encodable {
-    let url: String
-}
-
 private struct VisualVideoAnalysis: Decodable {
     let category: String
     let product: String?
     let scene: String
     let action: String
     let mood: String
-}
-
-private struct ChatMessage: Codable {
-    let role: String
-    let content: String
-}
-
-private struct ChatCompletionResponse: Decodable {
-    let choices: [ChatChoice]
-
-    var firstOutputText: String? {
-        choices.map(\.message.content).first { !$0.isEmpty }
-    }
-}
-
-private struct ChatChoice: Decodable {
-    let message: ChatMessage
-}
-
-private struct ChatErrorResponse: Decodable {
-    let error: ChatErrorBody
-}
-
-private struct ChatErrorBody: Decodable {
-    let message: String
-}
-
-enum LLMTranslationError: LocalizedError {
-    case missingAPIKey(String)
-    case missingModel
-    case invalidEndpoint
-    case invalidResponse
-    case emptyOutput(String)
-    case requestTimedOut(provider: String)
-    case requestFailed(provider: String, statusCode: Int, message: String?)
-    case visualFramesMissing
-    case visualModelUnsupported(String)
-
-    var errorDescription: String? {
-        switch self {
-        case let .missingAPIKey(provider):
-            AppText.translationAPIKeyMissing(provider)
-        case .missingModel:
-            AppText.translationModelMissing
-        case .invalidEndpoint:
-            AppText.translationEndpointInvalid
-        case .invalidResponse:
-            AppText.translationInvalidResponse
-        case let .emptyOutput(provider):
-            AppText.translationEmptyOutput(provider)
-        case let .requestTimedOut(provider):
-            AppText.translationRequestTimedOut(provider)
-        case let .requestFailed(provider, statusCode, message):
-            AppText.translationRequestFailed(provider: provider, statusCode: statusCode, message: message)
-        case .visualFramesMissing:
-            AppText.visualFramesMissing
-        case let .visualModelUnsupported(provider):
-            AppText.visualModelUnsupported(provider)
-        }
-    }
 }

@@ -1,7 +1,16 @@
 import Foundation
+import VidLingoCore
+
+enum TranscriptOrigin: String, Sendable {
+    case current
+    case legacyAirTranslate
+}
 
 struct SavedTranscript: Identifiable, Equatable {
     let id: String
+    let origin: TranscriptOrigin
+    let artifactKind: TranscriptArtifactKind
+    let manifest: TranscriptArtifactManifest?
     var title: String
     var sourceText: String
     var translatedText: String?
@@ -11,6 +20,9 @@ struct SavedTranscript: Identifiable, Equatable {
     var translationFileURL: URL?
     var updatedAt: Date
 
+    var isLegacy: Bool { origin == .legacyAirTranslate }
+    var isVisualGeneratedCopy: Bool { artifactKind == .visualGeneratedCopy }
+
     var isOriginalAndTranslation: Bool {
         translatedText != nil && translationFileName != nil
     }
@@ -18,10 +30,16 @@ struct SavedTranscript: Identifiable, Equatable {
     init(
         fileURL: URL,
         sourceText: String,
-        updatedAt: Date
+        updatedAt: Date,
+        origin: TranscriptOrigin = .current,
+        artifactKind: TranscriptArtifactKind = .transcriptionTranslation,
+        manifest: TranscriptArtifactManifest? = nil
     ) {
         let fileName = fileURL.lastPathComponent
-        self.id = fileName
+        self.id = "\(origin.rawValue):\(fileURL.standardizedFileURL.path)"
+        self.origin = origin
+        self.artifactKind = artifactKind
+        self.manifest = manifest
         self.title = SavedTranscript.title(from: sourceText, fallback: fileName)
         self.sourceText = sourceText
         self.translatedText = nil
@@ -38,9 +56,15 @@ struct SavedTranscript: Identifiable, Equatable {
         translationFileURL: URL,
         sourceText: String,
         translatedText: String,
-        updatedAt: Date
+        updatedAt: Date,
+        origin: TranscriptOrigin = .current,
+        artifactKind: TranscriptArtifactKind = .transcriptionTranslation,
+        manifest: TranscriptArtifactManifest? = nil
     ) {
         self.id = id
+        self.origin = origin
+        self.artifactKind = artifactKind
+        self.manifest = manifest
         self.title = SavedTranscript.title(from: sourceText, fallback: id)
         self.sourceText = sourceText
         self.translatedText = translatedText

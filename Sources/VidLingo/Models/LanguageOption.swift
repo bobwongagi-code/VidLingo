@@ -11,6 +11,7 @@ struct LanguageOption: Identifiable, Hashable, Sendable {
 
     static let english = LanguageOption(id: "en-US", title: "English", locale: Locale(identifier: "en-US"))
     static let korean = LanguageOption(id: "ko-KR", title: "Korean", locale: Locale(identifier: "ko-KR"))
+    static let undetermined = LanguageOption(id: "undetermined", title: "Undetermined", locale: Locale(identifier: "und"))
 
     static let supported: [LanguageOption] = [
         english,

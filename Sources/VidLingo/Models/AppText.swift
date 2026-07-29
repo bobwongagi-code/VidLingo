@@ -26,6 +26,8 @@ enum AppText {
     static let startOfflineTranslation = "开始翻译"
     static let processing = "处理中"
     static let processingVideo = "视频处理中"
+    static let cancelProcessing = "取消处理"
+    static let offlineVideoCancelled = "已取消视频处理"
     static let confirmVideoContent = "等待 Whisper 和所选模型处理前，先确认导入的是目标视频。"
     static let autoDetectInput = "自动检测输入语言"
     static let noCaptionsYet = "导入一个短视频"
@@ -57,6 +59,14 @@ enum AppText {
     static let elevenLabsAPIKeyRemoved = "ElevenLabs API key 已删除。"
     static let elevenLabsQualityRejected = "ElevenLabs 结果未通过质量检查"
     static let elevenLabsDurationUnavailable = "无法读取音频时长，为避免额度超支未调用 ElevenLabs"
+    static let cloudThaiTranscriptionConsent = "允许云端泰语复核"
+    static let cloudVideoFramesConsent = "允许上传视频截图做商品识别"
+    static let visualSalesCopyConsent = "无口播时允许生成画面文案"
+    static let cloudConsentHelp = "保存 API key 不等于授权上传。开启后，本次任务才会按对应开关发送音频或视频截图。"
+    static let executionPlanTitle = "本次处理计划"
+    static func localWhisperCloudDisabled(_ description: String) -> String {
+        "\(description) \(cloudThaiTranscriptionConsent)未开启，本次保留本地结果。"
+    }
     static let localWhisperSource = "本地 Whisper 转写结果。"
 
     static let savedTranscripts = "资料库"
@@ -68,8 +78,30 @@ enum AppText {
     static let saveEdits = "保存修改"
     static let deleteSavedTranscript = "删除记录"
     static let deleteAllSavedTranscripts = "删除全部"
-    static let deleteAllSavedTranscriptsConfirmation = "确定删除全部保存记录？"
+    static let deleteAllSavedTranscriptsConfirmation = "确定删除全部 VidLingo 记录？旧 AirTranslate 记录不会被删除。"
     static let noSavedTranscriptSelected = "未选择记录"
+    static let legacyTranscriptReadOnly = "旧 AirTranslate 记录只读，请先导入到 VidLingo 后再编辑或删除。"
+    static let translationMissing = "译文文件不存在。"
+    static let savedEdits = "记录修改已保存。"
+    static let deletedSavedTranscript = "记录已删除。"
+    static let deletedCurrentTranscripts = "VidLingo 记录已删除；旧 AirTranslate 记录未修改。"
+    static let noLegacyTranscripts = "没有可导入的旧 AirTranslate 记录。"
+    static func importedLegacyTranscripts(imported: Int, skipped: Int, failed: Int) -> String {
+        if failed == 0, skipped == 0 {
+            return "已复制导入 \(imported) 条旧 AirTranslate 记录，原记录保持不变。"
+        }
+        return "已导入 \(imported) 条旧记录，跳过 \(skipped) 条已导入记录，\(failed) 条导入失败；原记录保持不变。"
+    }
+    static func deleteSomeTranscriptsFailed(_ count: Int) -> String {
+        "\(count) 条 VidLingo 记录删除失败，其他记录已处理；旧 AirTranslate 记录未修改。"
+    }
+    static let importLegacyTranscripts = "导入旧 AirTranslate 记录"
+    static let clearDiagnostics = "清理诊断记录"
+    static let diagnosticsCleared = "诊断记录已清理。"
+    static func diagnosticsClearFailed(_ message: String) -> String {
+        "诊断记录清理失败：\(message)"
+    }
+    static let currentArtifactVisualGenerated = "画面生成文案"
 
     static func languageTitle(for id: String, fallback: String) -> String {
         switch id {
@@ -83,6 +115,7 @@ enum AppText {
         case "es-ES": "西班牙语"
         case "fr-FR": "法语"
         case "de-DE": "德语"
+        case "undetermined": "未确定"
         default: fallback
         }
     }
@@ -194,5 +227,20 @@ enum AppText {
 
     static func translationAPIKeychainFailed(_ status: OSStatus) -> String {
         "Keychain 操作失败（\(status)）。"
+    }
+
+    static func keychainAvailabilityText(_ availability: KeychainAvailability) -> String {
+        switch availability {
+        case .configured:
+            translationAPIKeyConfigured
+        case .missing:
+            translationAPIKeyNotConfigured
+        case .locked:
+            "Keychain 已锁定，请解锁 Mac 后重试"
+        case .accessDenied:
+            "Keychain 拒绝访问，请检查权限"
+        case .corrupted:
+            "Keychain 中的 API key 无法读取，请重新保存"
+        }
     }
 }

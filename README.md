@@ -14,19 +14,23 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - For Thai, use the Pathumma specialist model first and selectively review uncertain segments with the general model.
 - Optionally use ElevenLabs Scribe v2 as a quota-guarded fallback when local Thai candidates cannot be resolved reliably.
 - Translate the full transcript with a short-video e-commerce prompt.
-- Choose DeepSeek, OpenAI, Qwen, Claude-compatible, or a custom OpenAI-compatible endpoint.
+- Always translate to Simplified Chinese; the spoken input language can be detected or selected manually.
+- Choose DeepSeek, OpenAI, Qwen, OpenRouter / Claude, Anthropic / Claude, or a custom OpenAI-compatible endpoint.
 - Save original and Chinese translation text files locally.
+- When no speech is detected, optionally generate an explicitly labeled visual sales script after enabling separate cloud frame and visual-copy consent switches.
 
 ## Requirements
 
 - macOS 15 or newer.
 - Swift 6 toolchain.
 - `ffmpeg` available on `PATH`.
-- `whisper-cli` or `main` from `whisper.cpp` available on `PATH`.
+- `whisper-cli` or `whisper-cpp` from `whisper.cpp` available on `PATH`; `VIDLINGO_WHISPER_CLI` can specify an exact path.
 - A local general Whisper model, preferably `ggml-large-v3-q5_0.bin`.
 - For Thai, optionally install `ggml-pathumma-th-large-v3-q5_0.bin`; VidLingo uses it first and falls back to the general model when it is unavailable.
-- An API key for the selected translation provider.
+- An API key for the selected translation provider. Saving a key does not authorize audio or frame uploads.
+- Cloud Thai review, cloud frame uploads, and no-speech visual copy are separate opt-in switches and default to off.
 - An optional ElevenLabs API key for rare Thai transcription fallback only. VidLingo checks the remaining credit pool before sending audio.
+- Custom endpoints must use HTTPS by default. Loopback HTTP is accepted only with `VIDLINGO_ALLOW_LOCAL_HTTP=1`.
 
 VidLingo looks for Whisper models in:
 
@@ -47,9 +51,12 @@ DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flas
 OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
 Qwen / 千问     https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
 Qwen-MT        same Qwen endpoint, model names like qwen-mt-flash or qwen-mt-plus
-Claude         https://openrouter.ai/api/v1/chat/completions    claude-sonnet-4-5-20250929
-Custom         user-provided OpenAI-compatible chat completions URL
+OpenRouter / Claude  https://openrouter.ai/api/v1/chat/completions  anthropic/claude-sonnet-4.5
+Anthropic / Claude   https://api.anthropic.com/v1/messages             claude-sonnet-4-5
+Custom         user-provided HTTPS OpenAI-compatible chat completions URL
 ```
+
+Custom endpoints must not contain query strings or fragments; put credentials in the provider API-key field instead. Responses may use `choices[].message.content`, content blocks, `choices[].text`, top-level `output_text`, or an `output` text structure.
 
 API keys are stored in macOS Keychain per provider. The previous DeepSeek key is still read as a migration fallback.
 
@@ -64,30 +71,44 @@ Resources/TranslationSystemPrompt.md
 ## Run Locally
 
 ```bash
-./script/build_and_run.sh
+./script/build_and_run.sh run
 ```
 
-The script builds the Swift package, creates `dist/VidLingo.app`, copies it to `~/Applications/VidLingo.app`, signs it locally, and opens it.
+The `run` mode requires a stable `CODE_SIGN_IDENTITY`, builds the Swift package, creates `dist/VidLingo.app`, copies it to `~/Applications/VidLingo.app`, and opens it. The explicit `dev-run` mode uses ad-hoc signing for local development only; it may reset Keychain and privacy grants after rebuilds. The default mode only builds the bundle.
 
 ## App Data
 
-New saved transcripts are written to:
+New saved transcripts are written as manifest-backed directories to:
 
 ```text
 ~/Library/Application Support/VidLingo/Transcripts/
 ```
 
-VidLingo also reads old saved transcript files from:
+VidLingo reads old saved transcript files as read-only records. Use the explicit import action to copy them into VidLingo storage; delete-all only deletes VidLingo-owned records:
 
 ```text
 ~/Library/Application Support/AirTranslate/Transcripts/
 ```
 
+## Build and Verify
+
+```bash
+./script/build_and_run.sh build     # build dist/VidLingo.app only
+./script/build_and_run.sh package   # stable-signed release bundle as a zip
+./script/build_and_run.sh install   # build and install to ~/Applications
+./script/build_and_run.sh run       # build, install, and open
+./script/build_and_run.sh verify    # build and verify the bundle
+./script/build_and_run.sh stop      # explicitly stop a running VidLingo
+swift test
+```
+
+`build` may use ad-hoc signing for a local bundle check. `install`, `run`, `package`, and `verify` require an explicit stable Apple signing identity so Keychain and privacy grants are tied to the intended app identity. The explicit `dev-run` mode is the only install-and-open path that permits ad-hoc signing. The ad-hoc build path can be disabled with `VIDLINGO_ALLOW_ADHOC_SIGNING=0`.
+
 ## Project Layout
 
 ```text
-Sources/VidLingo/          macOS app UI and offline workflow
-Sources/VidLingoCore/      transcript text processing helpers
+Sources/VidLingo/          macOS app UI and platform integrations
+Sources/VidLingoCore/      pure workflow rules, transcript processing, and storage helpers
 Resources/                 app icon assets
 script/                    local build and app bundle scripts
 ```
