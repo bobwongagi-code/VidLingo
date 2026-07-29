@@ -270,18 +270,16 @@ private struct OfflineVideoPreviewCard: View {
     }
 
     private static func makeThumbnail(for videoURL: URL) async -> NSImage? {
-        await Task.detached(priority: .utility) {
-            let asset = AVURLAsset(url: videoURL)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 360, height: 220)
-            let requestedTime = CMTime(seconds: 0.35, preferredTimescale: 600)
+        let asset = AVURLAsset(url: videoURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 360, height: 220)
+        let requestedTime = CMTime(seconds: 0.35, preferredTimescale: 600)
 
-            guard let (cgImage, _) = try? await generator.image(at: requestedTime) else {
-                return nil
-            }
-            return NSImage(cgImage: cgImage, size: .zero)
-        }.value
+        guard let (cgImage, _) = try? await generator.image(at: requestedTime) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage, size: .zero)
     }
 }
 

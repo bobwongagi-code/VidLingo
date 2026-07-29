@@ -11,7 +11,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Check shell script and diff contracts
         run: bash -n script/build_and_run.sh && git diff --check
       - name: Build the app target
