@@ -2,7 +2,7 @@ import XCTest
 @testable import VidLingoCore
 
 final class EndpointValidatorTests: XCTestCase {
-    func testHTTPS endpointReturnsOrigin() throws {
+    func testHTTPSEndpointReturnsOrigin() throws {
         let endpoint = try EndpointValidator.validate("https://api.example.com/v1/chat/completions")
 
         XCTAssertEqual(endpoint.origin, "https://api.example.com")
