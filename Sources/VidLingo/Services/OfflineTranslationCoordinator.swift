@@ -30,11 +30,13 @@ struct OfflineTranslationRunResult: Sendable {
 
 struct OfflineTranslationCoordinator {
     typealias ProgressHandler = @Sendable (String) async -> Void
+    typealias TranscriptionHandler = @Sendable (String, String) async -> Void
 
     func run(
         request: OfflineTranslationRunRequest,
         token: ProcessCancellationToken,
-        reportProgress: @escaping ProgressHandler
+        reportProgress: @escaping ProgressHandler,
+        reportTranscription: @escaping TranscriptionHandler
     ) async throws -> OfflineTranslationRunResult {
         var audioURL: URL?
         var stageTimings = [OfflineTranslationStageTiming]()
@@ -99,6 +101,7 @@ struct OfflineTranslationCoordinator {
             )
             recordStage("transcription", startedAt: transcriptionStartedAt)
             thaiDiagnostics = transcription.diagnostics
+            await reportTranscription(transcription.sourceText, transcription.sourceDescription)
 
             guard SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
                 transcription.sourceText,

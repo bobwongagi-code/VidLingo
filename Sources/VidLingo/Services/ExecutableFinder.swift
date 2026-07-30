@@ -28,15 +28,17 @@ enum ExecutableFinder {
         return nil
     }
 
-    static func findWhisperExecutable() -> URL? {
-        if let configuredPath = ProcessInfo.processInfo.environment["VIDLINGO_WHISPER_CLI"],
+    static func findWhisperExecutable(
+        configuredPath: String? = ProcessInfo.processInfo.environment["VIDLINGO_WHISPER_CLI"]
+    ) -> URL? {
+        if let configuredPath,
            !configuredPath.isEmpty {
             let configuredURL = URL(fileURLWithPath: configuredPath)
-            return isWhisperExecutable(configuredURL) ? configuredURL : nil
+            return FileManager.default.isExecutableFile(atPath: configuredURL.path) ? configuredURL : nil
         }
 
-        let candidates = findAllExecutableCandidates(named: ["whisper-cli", "whisper-cpp"])
-        return candidates.first(where: isWhisperExecutable)
+        // 不在发现阶段执行 --help；泰语分段并发时重复启动 CLI 会误报“未安装”。
+        return findAllExecutableCandidates(named: ["whisper-cli", "whisper-cpp"]).first
     }
 
     private static func findAllExecutableCandidates(named names: [String]) -> [URL] {
@@ -59,23 +61,5 @@ enum ExecutableFinder {
             }
         }
         return candidates
-    }
-
-    private static func isWhisperExecutable(_ url: URL) -> Bool {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = url
-        process.arguments = ["--help"]
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            let token = ProcessCancellationToken(timeout: 2)
-            let status = try ProcessSupervisor.run(process, token: token, timeout: 2)
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(decoding: data.prefix(32 * 1024), as: UTF8.self).lowercased()
-            return status == 0 && (output.contains("whisper") || output.contains("ggml"))
-        } catch {
-            return false
-        }
     }
 }

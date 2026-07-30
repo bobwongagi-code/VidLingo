@@ -6,17 +6,20 @@ struct LLMGenerationOptions: Sendable {
     let maxTokens: Int
     let translationOptions: TranslationOptions?
     let maxFrameCount: Int
+    let enableThinking: Bool?
 
     init(
         temperature: Double?,
         maxTokens: Int,
         translationOptions: TranslationOptions? = nil,
-        maxFrameCount: Int = 0
+        maxFrameCount: Int = 0,
+        enableThinking: Bool? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.translationOptions = translationOptions
         self.maxFrameCount = maxFrameCount
+        self.enableThinking = enableThinking
     }
 }
 
@@ -70,7 +73,8 @@ struct ChatCompletionsProviderAdapter: LLMProviderAdapter, Sendable {
             stream: false,
             temperature: options.temperature,
             maxTokens: options.maxTokens,
-            translationOptions: options.translationOptions
+            translationOptions: options.translationOptions,
+            enableThinking: options.enableThinking
         )
         return try await LLMHTTPClient.sendChat(request: request, body: body, provider: provider)
     }
@@ -141,7 +145,8 @@ struct ChatCompletionsProviderAdapter: LLMProviderAdapter, Sendable {
             messages: messages,
             stream: false,
             temperature: options.temperature,
-            maxTokens: options.maxTokens
+            maxTokens: options.maxTokens,
+            enableThinking: options.enableThinking
         )
     }
 }
@@ -269,6 +274,7 @@ struct ChatCompletionRequest: Encodable, Sendable {
     let temperature: Double?
     let maxTokens: Int?
     let translationOptions: TranslationOptions?
+    let enableThinking: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case model
@@ -277,6 +283,7 @@ struct ChatCompletionRequest: Encodable, Sendable {
         case temperature
         case maxTokens = "max_tokens"
         case translationOptions = "translation_options"
+        case enableThinking = "enable_thinking"
     }
 }
 
@@ -312,6 +319,7 @@ struct VisionChatCompletionRequest: Encodable, Sendable {
     let stream: Bool
     let temperature: Double?
     let maxTokens: Int?
+    let enableThinking: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case model
@@ -319,6 +327,7 @@ struct VisionChatCompletionRequest: Encodable, Sendable {
         case stream
         case temperature
         case maxTokens = "max_tokens"
+        case enableThinking = "enable_thinking"
     }
 }
 

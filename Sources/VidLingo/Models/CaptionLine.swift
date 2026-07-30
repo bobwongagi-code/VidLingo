@@ -26,4 +26,15 @@ struct CaptionLine: Identifiable, Equatable {
         self.isFinal = isFinal
         self.revision = revision
     }
+
+    static func partialTranscript(sourceText: String, createdAt: Date = Date()) -> CaptionLine {
+        CaptionLine(
+            sourceText: sourceText,
+            translatedText: "",
+            translatedSourceText: sourceText,
+            createdAt: createdAt,
+            isFinal: false,
+            revision: 1
+        )
+    }
 }

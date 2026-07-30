@@ -27,4 +27,20 @@ final class LLMProviderAdapterTests: XCTestCase {
     func testInvalidVisualResponseCanUseNoSpeechFallback() {
         XCTAssertTrue(LLMTranslationError.visualResponseInvalid.allowsVisionFallback)
     }
+
+    func testChatRequestIncludesQwenThinkingPreference() throws {
+        let request = ChatCompletionRequest(
+            model: "qwen3.6-plus",
+            messages: [ChatMessage(role: "user", content: "翻译")],
+            stream: false,
+            temperature: 0.2,
+            maxTokens: 2_500,
+            translationOptions: nil,
+            enableThinking: false
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(payload["enable_thinking"] as? Bool, false)
+    }
 }

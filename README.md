@@ -49,7 +49,7 @@ VidLingo uses a shared Chat Completions-style request for these built-in provide
 ```text
 DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flash
 OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
-Qwen / 千问     https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
+Qwen / 千问     https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
 Qwen-MT        same Qwen endpoint, model names like qwen-mt-flash or qwen-mt-plus
 OpenRouter / Claude  https://openrouter.ai/api/v1/chat/completions  anthropic/claude-sonnet-4.5
 Anthropic / Claude   https://api.anthropic.com/v1/messages             claude-sonnet-4-5

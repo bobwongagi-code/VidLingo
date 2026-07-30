@@ -51,7 +51,7 @@ enum TranslationProviderID: String, CaseIterable, Identifiable, Sendable {
         case .openAI:
             "https://api.openai.com/v1/chat/completions"
         case .qwen:
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+            "https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
         case .claudeCompatible:
             "https://openrouter.ai/api/v1/chat/completions"
         case .anthropic:

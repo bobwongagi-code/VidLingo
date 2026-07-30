@@ -282,8 +282,26 @@ actor LLMTranslationService {
         return (
             system: systemPrompt,
             userText: userPrompt,
-            options: LLMGenerationOptions(temperature: 0.2, maxTokens: 2_500)
+            options: LLMGenerationOptions(
+                temperature: 0.2,
+                maxTokens: 2_500,
+                enableThinking: nonThinkingTranslationMode(provider: provider, modelName: modelName)
+            )
         )
+    }
+
+    private func nonThinkingTranslationMode(
+        provider: TranslationProviderID,
+        modelName: String
+    ) -> Bool? {
+        guard provider == .qwen else { return nil }
+        let normalizedName = modelName.lowercased()
+        guard normalizedName.hasPrefix("qwen3.5")
+                || normalizedName.hasPrefix("qwen3.6")
+                || normalizedName.hasPrefix("qwen3.7") else {
+            return nil
+        }
+        return false
     }
 
     private func productContextPrompt(_ text: String, fileName: String, source: LanguageOption) -> String {

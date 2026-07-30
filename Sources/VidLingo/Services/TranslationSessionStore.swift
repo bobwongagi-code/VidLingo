@@ -212,6 +212,12 @@ final class TranslationSessionStore {
                         await MainActor.run {
                             self.statusMessage = message
                         }
+                    },
+                    reportTranscription: { sourceText, sourceDescription in
+                        await MainActor.run {
+                            self.transcriptionSourceDescription = sourceDescription
+                            self.lines = [CaptionLine.partialTranscript(sourceText: sourceText)]
+                        }
                     }
                 )
                 if let availability = result.elevenLabsAPIKeyAvailability {
@@ -250,12 +256,6 @@ final class TranslationSessionStore {
                 statusMessage = AppText.offlineVideoFailed(ProcessSupervisorError.deadlineExceeded.localizedDescription)
             } catch {
                 statusMessage = AppText.offlineVideoFailed(sanitizedErrorDescription(error))
-                if lines.isEmpty {
-                    lines = [CaptionLine(
-                        sourceText: videoURL.lastPathComponent, translatedText: statusMessage,
-                        translatedSourceText: videoURL.lastPathComponent, createdAt: Date(), isFinal: true
-                    )]
-                }
             }
         }
         processingTask = task
