@@ -22,6 +22,7 @@ Release/product/
 
 # Local Codex/app environment
 .codex/
+.claude/settings.local.json
 
 # Local secrets and signing material
 .env
