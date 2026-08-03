@@ -4,15 +4,15 @@ All notable changes to VidLingo are documented in this file.
 
 ## Unreleased
 
-- Removed the legacy specialist-transcription and remote-review paths.
-- Added a Malay greedy-decoding retry when the primary local transcript fails quality validation.
+- Removed legacy specialist-transcription, remote-review, and local transcript-selection paths.
+- Replaced local transcription dependencies with the Fun-ASR Flash cloud transcription path.
 
 ## 1.3.2 - 2026-07-29
 
 ### Reliability and Security
 
 - Made transcript edits and deletes transactional for legacy flat file pairs.
-- Added visual-response schema fallback, broader LLM response parsing, endpoint query/fragment rejection, and stronger Whisper GGML validation.
+- Added visual-response schema fallback, broader LLM response parsing, endpoint query/fragment rejection, and stronger media validation.
 - Added explicit media-operation timeouts and cancellation handling for AVFoundation duration and frame extraction.
 - Restricted install/run/package/verify to stable signing identities; ad-hoc install is now explicit `dev-run` only.
 - Added app/core regression tests and CI gates for scripts, bundle construction, and ad-hoc signature verification.

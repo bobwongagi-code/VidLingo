@@ -22,6 +22,12 @@ enum OfflineVideoAudioExtractor {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("VidLingo-OfflineVideo-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var keepsAudioDirectory = false
+        defer {
+            if !keepsAudioDirectory {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
 
         let audioURL = directory.appendingPathComponent("speech.wav")
         let enhancedArguments = [
@@ -40,6 +46,7 @@ enum OfflineVideoAudioExtractor {
         ]
         if try runFFmpeg(ffmpegURL, arguments: enhancedArguments, directory: directory, logName: "ffmpeg-enhanced.log", token: token) {
             try validateAudioSize(audioURL)
+            keepsAudioDirectory = true
             return audioURL
         }
 
@@ -56,13 +63,13 @@ enum OfflineVideoAudioExtractor {
         ]
         if try runFFmpeg(ffmpegURL, arguments: plainArguments, directory: directory, logName: "ffmpeg-plain.log", token: token) {
             try validateAudioSize(audioURL)
+            keepsAudioDirectory = true
             return audioURL
         }
 
         let message = readLog(directory.appendingPathComponent("ffmpeg-enhanced.log"))
             + "\n"
             + readLog(directory.appendingPathComponent("ffmpeg-plain.log"))
-        try? FileManager.default.removeItem(at: directory)
         throw OfflineVideoTranslationError.audioExtractionFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
@@ -95,7 +102,7 @@ enum OfflineVideoAudioExtractor {
 
     private static func validateAudioSize(_ audioURL: URL) throws {
         let size = (try? audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        guard size > 0, size <= MediaProcessingLimits.maxAudioBytes else {
+        guard size > 0, size <= FunASRTranscriber.maxAudioBytes else {
             throw OfflineVideoTranslationError.audioTooLarge
         }
     }
@@ -113,6 +120,7 @@ enum OfflineVideoTranslationError: LocalizedError {
     case invalidVideo
     case videoTooLarge
     case videoTooLong
+    case videoTooLongForFunASR
 
     var errorDescription: String? {
         switch self {
@@ -128,6 +136,8 @@ enum OfflineVideoTranslationError: LocalizedError {
             "视频文件超过允许大小，已停止处理。"
         case .videoTooLong:
             "视频超过允许时长，已停止处理。"
+        case .videoTooLongForFunASR:
+            "视频超过 Fun-ASR 支持的 5 分钟，已停止处理。"
         }
     }
 }

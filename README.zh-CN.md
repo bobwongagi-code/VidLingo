@@ -1,6 +1,6 @@
 # VidLingo
 
-VidLingo 是一个本地优先的 macOS 短视频离线翻译器。它导入本地视频，提取语音音频，用本地 Whisper 转写完整口播内容，再调用你选择的 LLM 模型翻译成简体中文。
+VidLingo 是一个本地优先的 macOS 短视频翻译器。它导入本地视频，在本地提取语音音频，上传到阿里云 Fun-ASR Flash 转写完整口播内容，再调用你选择的 LLM 模型翻译成简体中文。
 
 当前版本已经不再做实时 Mac 音频捕获、麦克风录音、屏幕录制或悬浮字幕。
 
@@ -9,9 +9,8 @@ VidLingo 是一个本地优先的 macOS 短视频离线翻译器。它导入本�
 - 导入本地 `.mov`、`.mp4`、`.m4v` 短视频。
 - 导入后在应用内预览视频。
 - 用 `ffmpeg` 本地提取语音音频。
-- 用 `whisper.cpp` 本地转写。
-- 开启自动检测时，优先使用 Whisper 判断口播语言。
-- 马来语首次转写未通过本地质量检查时，会用贪心解码重试一次，再进入无口播兜底。
+- 所有支持的语言统一使用 `fun-asr-flash-2026-06-15` 转写。
+- 开启自动检测时，根据 Fun-ASR 返回的文本在本地判断口播语言。
 - 用带货短视频语境 prompt 调用所选模型翻译整段内容。
 - 输出固定为简体中文；输入语言可自动检测或手动选择。
 - 可选择 DeepSeek、OpenAI、千问、OpenRouter / Claude、Anthropic / Claude，或自定义 OpenAI-compatible endpoint。
@@ -23,21 +22,10 @@ VidLingo 是一个本地优先的 macOS 短视频离线翻译器。它导入本�
 - macOS 15 或更新版本。
 - Swift 6 工具链。
 - `PATH` 中可用的 `ffmpeg`。
-- `PATH` 中可用的 `whisper-cli` 或 `whisper-cpp`；也可用 `VIDLINGO_WHISPER_CLI` 指定路径。
-- 本地通用 Whisper 模型，推荐 `ggml-large-v3-q5_0.bin`。
-- 在应用中保存所选翻译服务的 API key。保存 key 不会自动上传音频或视频截图。
+- 在应用中保存 Qwen / 千问 API key 供 Fun-ASR 使用，并保存所选翻译服务的 API key。选择千问翻译时，两者使用同一把 key。
+- 提取出的口播音频会上传到 Fun-ASR；视频截图和无口播画面文案仍由单独的授权开关控制。
 - 云端视频截图和无口播画面文案分别由默认关闭的开关控制。
 - 自定义 endpoint 默认必须使用 HTTPS；本机 HTTP 仅在明确设置 `VIDLINGO_ALLOW_LOCAL_HTTP=1` 时允许。
-
-VidLingo 会在这些目录查找 Whisper 模型：
-
-```text
-~/Library/Application Support/VidLingo/Models/
-~/Library/Application Support/AirTranslate/Models/
-~/.cache/whisper/
-```
-
-旧 `AirTranslate` 模型目录会继续作为迁移兼容路径读取。
 
 ## 翻译模型服务
 
@@ -58,6 +46,13 @@ Custom         用户填写的 OpenAI-compatible chat completions URL（HTTPS）
 API key 会按服务分别保存在 macOS Keychain 中。旧 DeepSeek key 会继续作为迁移兼容读取。
 
 当千问模型名以 `qwen-mt-` 开头时，VidLingo 会使用 Qwen-MT 要求的 `translation_options` 请求格式，而不是普通 chat prompt。
+
+Fun-ASR 使用当前工作空间的原生接口：
+
+```text
+https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+fun-asr-flash-2026-06-15
+```
 
 翻译系统 prompt 打包在：
 

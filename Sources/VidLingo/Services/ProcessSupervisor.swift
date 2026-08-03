@@ -43,7 +43,7 @@ enum ProcessSupervisorError: LocalizedError, Equatable {
         case .cancelled:
             "任务已取消。"
         case .deadlineExceeded, .processTimedOut:
-            "本地处理超时。请缩短视频或检查 ffmpeg / Whisper 配置。"
+            "本地媒体处理超时。请缩短视频或检查 ffmpeg 配置。"
         }
     }
 }
@@ -131,7 +131,6 @@ final class BoundedProcessLog: @unchecked Sendable {
 enum MediaProcessingLimits {
     static let maxVideoBytes: Int64 = 1_024 * 1_024 * 1_024
     static let maxVideoDurationSeconds: Double = 15 * 60
-    static let maxAudioBytes: Int64 = 256 * 1_024 * 1_024
     static let totalTaskTimeout: TimeInterval = 20 * 60
     static let childProcessTimeout: TimeInterval = 10 * 60
 }

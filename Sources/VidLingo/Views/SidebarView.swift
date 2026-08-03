@@ -4,6 +4,7 @@ import VidLingoCore
 struct SidebarView: View {
     @Bindable var session: TranslationSessionStore
     @State private var apiKey = ""
+    @State private var funASRAPIKey = ""
     @State private var isLibraryPresented = false
 
     var body: some View {
@@ -33,6 +34,9 @@ struct SidebarView: View {
                 .disabled(session.isOfflineVideoProcessing)
             Toggle(AppText.visualSalesCopyConsent, isOn: $session.allowsVisualSalesCopy)
                 .disabled(session.isOfflineVideoProcessing)
+            Text(AppText.funASRCloudNotice)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text(AppText.cloudConsentHelp)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -137,6 +141,36 @@ struct SidebarView: View {
                 apiKey = ""
             }
             .disabled(!session.hasTranslationAPIKey)
+
+            if session.translationProvider != .qwen {
+                Divider()
+                Text("Fun-ASR / Qwen API key")
+                    .font(.caption.weight(.semibold))
+                SecureField("粘贴 Fun-ASR 使用的 Qwen API key", text: $funASRAPIKey)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Text(AppText.keychainAvailabilityText(session.funASRAPIKeyAvailability))
+                        .font(.caption)
+                        .foregroundStyle(session.hasFunASRAPIKey ? .green : .secondary)
+                    Spacer()
+                    Button(AppText.saveTranslationAPIKey) {
+                        session.saveFunASRAPIKey(funASRAPIKey)
+                        funASRAPIKey = ""
+                    }
+                    .disabled(funASRAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                Button(AppText.removeTranslationAPIKey) {
+                    session.removeFunASRAPIKey()
+                    funASRAPIKey = ""
+                }
+                .disabled(!session.hasFunASRAPIKey)
+            } else {
+                Text("当前 Qwen / 千问 API key 同时用于 Fun-ASR 转写。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if session.translationProvider == .custom {
                 Text("Custom endpoint 只接受 HTTPS；本机 HTTP 仅可通过开发环境变量显式开启。")

@@ -1,11 +1,22 @@
 import Foundation
 
-enum WhisperLanguageScorer {
-    static var candidates: [LanguageOption] {
-        LanguageOption.supported
+enum LanguageTextDetector {
+    static func detect(_ text: String) -> LanguageOption? {
+        let ranked = LanguageOption.supported
+            .map { language in
+                (language: language, score: score(transcript: text, language: language))
+            }
+            .sorted { $0.score > $1.score }
+
+        guard let best = ranked.first, best.score >= 0.35 else { return nil }
+        if let runnerUp = ranked.dropFirst().first,
+           best.score - runnerUp.score < 0.08 {
+            return nil
+        }
+        return best.language
     }
 
-    static func score(transcript: String, language: LanguageOption) -> Double {
+    private static func score(transcript: String, language: LanguageOption) -> Double {
         let normalizedText = transcript.lowercased()
         let scalars = Array(normalizedText.unicodeScalars)
         guard scalars.count >= 4 else { return 0 }

@@ -51,14 +51,4 @@ struct LanguageOption: Identifiable, Hashable, Sendable {
         return fallback
     }
 
-    static func whisperLanguageCode(_ code: String) -> LanguageOption? {
-        let normalizedCode = code.lowercased()
-        return supported.first { language in
-            language.id
-                .lowercased()
-                .split(separator: "-")
-                .first
-                .map(String.init) == normalizedCode
-        }
-    }
 }

@@ -10,7 +10,7 @@ enum AppText {
     static let to = "译文"
     static let original = "Original"
     static let translation = "Translation"
-    static let originalDescription = "Whisper 本地转写结果。"
+    static let originalDescription = "Fun-ASR 云端转写结果。"
     static let translationDescription = "所选模型生成的中文译文。"
     static let importVideo = "导入视频"
     static let shortVideoOfflineTranslator = "短视频离线翻译器"
@@ -28,10 +28,10 @@ enum AppText {
     static let processingVideo = "视频处理中"
     static let cancelProcessing = "取消处理"
     static let offlineVideoCancelled = "已取消视频处理"
-    static let confirmVideoContent = "等待 Whisper 和所选模型处理前，先确认导入的是目标视频。"
+    static let confirmVideoContent = "等待 Fun-ASR 和所选模型处理前，先确认导入的是目标视频。"
     static let autoDetectInput = "自动检测输入语言"
     static let noCaptionsYet = "导入一个短视频"
-    static let noCaptionsDescription = "选择本地 .mov 或 .mp4 文件。VidLingo 会本地转写，再用所选模型翻译完整文稿。"
+    static let noCaptionsDescription = "选择本地 .mov 或 .mp4 文件。VidLingo 会提取音频，用 Fun-ASR 转写，再用所选模型翻译完整文稿。"
     static let translating = "正在翻译..."
 
     static let translationModelSettings = "翻译模型"
@@ -48,16 +48,16 @@ enum AppText {
     static let translationEndpointInvalid = "Custom endpoint 不是有效 URL。"
     static let translationInvalidResponse = "模型服务返回了无效响应。"
     static let noEffectiveSpeech = "未检测到有效口播"
-    static let noEffectiveSpeechDescription = "这段视频可能没有可转写的人声，或 Whisper 只生成了重复幻觉文本。请手动填写商品类型，或换有清晰口播的视频。"
+    static let noEffectiveSpeechDescription = "这段视频可能没有可转写的人声，或 Fun-ASR 没有返回有效口播。请手动填写商品类型，或换有清晰口播的视频。"
     static let visualSalesCopyNotice = "未检测到有效口播。以下内容不是口播翻译，而是根据视频画面推断生成的中文口播文案。"
     static let visualFramesMissing = "没有可用于画面理解的视频截图。"
     static let processingPermissions = "处理权限"
+    static let funASRCloudNotice = "口播音频会上传到 Qwen Fun-ASR 进行转写"
     static let cloudVideoFramesConsent = "允许上传视频截图做商品识别"
     static let visualSalesCopyConsent = "无口播时允许生成画面文案"
-    static let cloudConsentHelp = "保存 API key 不等于授权上传。开启后，本次任务才会按对应开关发送视频截图。"
+    static let cloudConsentHelp = "Qwen / 千问 API key 保存在本机 Keychain；视频截图仅在打开对应开关时上传。"
     static let executionPlanTitle = "本次处理计划"
-    static let localWhisperSource = "本地 Whisper 转写结果。"
-    static let malayGreedyWhisperSource = "本地 Whisper 马来语备用解码结果。"
+    static let funASRSource = "Fun-ASR 云端转写结果。"
 
     static let savedTranscripts = "资料库"
     static let manageSavedTranscripts = "管理已保存记录"
@@ -123,11 +123,7 @@ enum AppText {
     }
 
     static func offlineVideoTranscribing(_ fileName: String) -> String {
-        "正在用本地 Whisper 转写 \(fileName)..."
-    }
-
-    static func malayWhisperRetrying(_ fileName: String) -> String {
-        "马来语首次转写质量不足，正在用备用解码重试 \(fileName)..."
+        "正在用 Fun-ASR 转写 \(fileName)..."
     }
 
     static func inferringProductContext(_ fileName: String) -> String {
@@ -168,6 +164,15 @@ enum AppText {
 
     static func translationAPIKeyMissing(_ provider: String) -> String {
         "使用 \(provider) 翻译前，请先保存 API key。"
+    }
+
+    static func funASRKeyConfigurationWarning(_ availability: KeychainAvailability) -> String {
+        switch availability {
+        case .missing:
+            "使用 Fun-ASR 转写前，请先保存 Qwen / 千问 API key。"
+        default:
+            "Fun-ASR 的 Qwen API key：\(keychainAvailabilityText(availability))"
+        }
     }
 
     static func translationEmptyOutput(_ provider: String) -> String {

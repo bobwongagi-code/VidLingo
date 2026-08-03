@@ -1,6 +1,6 @@
 # VidLingo
 
-VidLingo is a local-first macOS short-video translator. It imports a local video, extracts speech audio, transcribes it with local Whisper, and translates the complete transcript to Simplified Chinese with your selected LLM provider.
+VidLingo is a local-first macOS short-video translator. It imports a local video, extracts speech audio locally, sends the audio to Alibaba Cloud Fun-ASR Flash, and translates the complete transcript to Simplified Chinese with your selected LLM provider.
 
 The current workflow is offline-first and short-video oriented. It no longer captures realtime Mac audio, microphone audio, or screen content.
 
@@ -9,9 +9,8 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Import a local `.mov`, `.mp4`, or `.m4v` short video.
 - Preview the selected video before translation.
 - Extract speech audio locally with `ffmpeg`.
-- Transcribe locally with `whisper.cpp`.
-- Detect the spoken language from Whisper when auto detection is enabled.
-- If a Malay transcript fails the local quality check, retry once with greedy decoding before using the no-speech fallback.
+- Transcribe all supported languages with `fun-asr-flash-2026-06-15`.
+- Detect the spoken language locally from the returned transcript when auto detection is enabled.
 - Translate the full transcript with a short-video e-commerce prompt.
 - Always translate to Simplified Chinese; the spoken input language can be detected or selected manually.
 - Choose DeepSeek, OpenAI, Qwen, OpenRouter / Claude, Anthropic / Claude, or a custom OpenAI-compatible endpoint.
@@ -23,21 +22,10 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - macOS 15 or newer.
 - Swift 6 toolchain.
 - `ffmpeg` available on `PATH`.
-- `whisper-cli` or `whisper-cpp` from `whisper.cpp` available on `PATH`; `VIDLINGO_WHISPER_CLI` can specify an exact path.
-- A local general Whisper model, preferably `ggml-large-v3-q5_0.bin`.
-- An API key for the selected translation provider. Saving a key does not authorize audio or frame uploads.
+- A Qwen / 千问 API key for Fun-ASR and an API key for the selected translation provider. When Qwen is selected for translation, the same key is used for both.
+- The extracted speech audio is uploaded to Fun-ASR for transcription; frame uploads and no-speech visual copy remain separate opt-in switches.
 - Cloud frame uploads and no-speech visual copy are separate opt-in switches and default to off.
 - Custom endpoints must use HTTPS by default. Loopback HTTP is accepted only with `VIDLINGO_ALLOW_LOCAL_HTTP=1`.
-
-VidLingo looks for Whisper models in:
-
-```text
-~/Library/Application Support/VidLingo/Models/
-~/Library/Application Support/AirTranslate/Models/
-~/.cache/whisper/
-```
-
-The old `AirTranslate` model path is kept as a migration fallback.
 
 ## Translation Providers
 
@@ -58,6 +46,13 @@ Custom endpoints must not contain query strings or fragments; put credentials in
 API keys are stored in macOS Keychain per provider. The previous DeepSeek key is still read as a migration fallback.
 
 When the selected Qwen model name starts with `qwen-mt-`, VidLingo uses Qwen-MT's required `translation_options` request shape instead of the normal chat prompt.
+
+Fun-ASR uses the workspace-specific native endpoint:
+
+```text
+https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+fun-asr-flash-2026-06-15
+```
 
 The translation system prompt is bundled from:
 

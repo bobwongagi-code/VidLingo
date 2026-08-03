@@ -3,10 +3,10 @@ import XCTest
 @testable import VidLingo
 
 final class ExecutableFinderTests: XCTestCase {
-    func testConfiguredWhisperExecutableDoesNotRequireHelpProbe() throws {
+    func testFindsExecutableInProvidedDirectory() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("VidLingo-ExecutableFinder-\(UUID().uuidString)", isDirectory: true)
-        let executableURL = directory.appendingPathComponent("whisper-cli")
+        let executableURL = directory.appendingPathComponent("vidlingo-test-tool")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -14,7 +14,10 @@ final class ExecutableFinderTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
 
         XCTAssertEqual(
-            ExecutableFinder.findWhisperExecutable(configuredPath: executableURL.path),
+            ExecutableFinder.findExecutable(
+                named: [executableURL.lastPathComponent],
+                commonDirectories: [directory.path]
+            ),
             executableURL
         )
     }
