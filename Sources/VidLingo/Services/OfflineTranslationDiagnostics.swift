@@ -1,5 +1,4 @@
 import Foundation
-import VidLingoCore
 
 struct OfflineTranslationStageTiming: Codable, Sendable {
     let name: String
@@ -12,7 +11,6 @@ struct OfflineTranslationDiagnosticRecord: Codable, Sendable {
     let videoDurationSeconds: Int?
     let outcome: String
     let stages: [OfflineTranslationStageTiming]
-    let thai: ThaiTranscriptionDiagnostics?
     let errorDescription: String?
 }
 
@@ -31,7 +29,6 @@ enum OfflineTranslationDiagnostics {
                 videoDurationSeconds: record.videoDurationSeconds,
                 outcome: record.outcome,
                 stages: record.stages,
-                thai: record.thai,
                 errorDescription: record.errorDescription.map(sanitizedErrorDescription)
             )
             let data = try JSONEncoder.diagnostic.encode(sanitizedRecord)

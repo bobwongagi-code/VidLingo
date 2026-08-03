@@ -4,7 +4,8 @@ All notable changes to VidLingo are documented in this file.
 
 ## Unreleased
 
-- No unreleased changes.
+- Removed the legacy specialist-transcription and remote-review paths.
+- Added a Malay greedy-decoding retry when the primary local transcript fails quality validation.
 
 ## 1.3.2 - 2026-07-29
 
@@ -26,11 +27,6 @@ All notable changes to VidLingo are documented in this file.
 - Restricted custom endpoints to HTTPS by default and separated API-key storage from cloud audio/frame consent.
 - Added provider capability metadata, explicit OpenRouter / Claude and Anthropic naming, flexible response parsing, and safer visual fallback behavior.
 - Added regression tests and a macOS Swift CI workflow.
-
-### Added
-
-- Added adaptive Thai transcription: Pathumma runs first, then the general Whisper model reviews only uncertain segments.
-- Added an optional quota-guarded ElevenLabs Scribe v2 fallback for unresolved Thai local transcription candidates.
 
 ### Changed
 

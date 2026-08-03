@@ -1,4 +1,3 @@
-import AVFoundation
 import Foundation
 import VidLingoCore
 
@@ -10,19 +9,14 @@ enum LocalWhisperRunner {
 
     private struct WhisperRunResult {
         let text: String
-        let meanTokenProbability: Double?
     }
 
     static func transcribe(
         audioFileURL: URL,
         language: LanguageOption,
-        token: ProcessCancellationToken
+        token: ProcessCancellationToken,
+        beamSize: Int = 5
     ) async throws -> String {
-        if language.id == "th-TH" {
-            let candidates = try await transcribeThaiCandidates(audioFileURL: audioFileURL, token: token)
-            return TranscriptionQualityEvaluator.assess(candidates).selectedText
-        }
-
         return try await Task.detached(priority: .utility) {
             try token.check()
             let directory = FileManager.default.temporaryDirectory
@@ -34,119 +28,9 @@ enum LocalWhisperRunner {
                 audioFileURL: audioFileURL,
                 languageCode: languageCode,
                 temporaryDirectory: directory,
+                beamSize: beamSize,
                 token: token
             ).text
-        }.value
-    }
-
-    static func transcribeThaiCandidates(
-        audioFileURL: URL,
-        token: ProcessCancellationToken
-    ) async throws -> [WhisperSegmentCandidates] {
-        try await Task.detached(priority: .utility) {
-            try token.check()
-            guard let duration = await audioDurationSeconds(audioFileURL: audioFileURL) else {
-                throw LocalWhisperError.transcriptionFailed("Could not read audio duration.")
-            }
-            let segmentPlan = makeSegmentPlan(duration: duration)
-            guard segmentPlan.count <= MediaProcessingLimits.maxThaiWhisperSegments else {
-                throw LocalWhisperError.tooManySegments
-            }
-            let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("VidLingo-Whisper-Candidates-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: directory) }
-
-            var candidatesByIndex: [Int: [WhisperSegmentCandidate]] = [:]
-            guard let generalModelURL = WhisperModelResolver.generalModelURL else {
-                throw LocalWhisperError.modelNotFound
-            }
-
-            func currentSegments() -> [WhisperSegmentCandidates] {
-                segmentPlan.enumerated().map { index, segment in
-                    WhisperSegmentCandidates(
-                        index: index,
-                        offset: segment.offset,
-                        duration: segment.duration,
-                        candidates: candidatesByIndex[index] ?? []
-                    )
-                }
-            }
-
-            guard let thaiModelURL = WhisperModelResolver.thaiModelURL else {
-                let generalCandidates = try transcribeCandidateSegmentsSynchronously(
-                    audioFileURL: audioFileURL,
-                    languageCode: "th",
-                    segments: segmentPlan,
-                    modelURL: generalModelURL,
-                    profile: .generalBeam,
-                    beamSize: 5,
-                    temporaryDirectory: directory.appendingPathComponent("general", isDirectory: true),
-                    token: token
-                )
-                for (index, candidate) in generalCandidates.enumerated() {
-                    candidatesByIndex[index, default: []].append(candidate)
-                }
-                return currentSegments()
-            }
-
-            let specialistCandidates = try transcribeCandidateSegmentsSynchronously(
-                audioFileURL: audioFileURL,
-                languageCode: "th",
-                segments: segmentPlan,
-                modelURL: thaiModelURL,
-                profile: .thaiSpecialistGreedy,
-                beamSize: 1,
-                temporaryDirectory: directory.appendingPathComponent("thai-specialist", isDirectory: true),
-                token: token
-            )
-            for (index, candidate) in specialistCandidates.enumerated() {
-                candidatesByIndex[index, default: []].append(candidate)
-            }
-
-            let reviewIndexes = TranscriptionQualityEvaluator.generalReviewIndexes(for: currentSegments())
-            guard !reviewIndexes.isEmpty else {
-                return currentSegments()
-            }
-
-            let reviewSegments = reviewIndexes.map { segmentPlan[$0] }
-            let reviewCandidates = try transcribeCandidateSegmentsSynchronously(
-                audioFileURL: audioFileURL,
-                languageCode: "th",
-                segments: reviewSegments,
-                modelURL: generalModelURL,
-                profile: .generalBeam,
-                beamSize: 5,
-                temporaryDirectory: directory.appendingPathComponent("general-review", isDirectory: true),
-                token: token
-            )
-            for (index, candidate) in zip(reviewIndexes, reviewCandidates) {
-                candidatesByIndex[index, default: []].append(candidate)
-            }
-
-            let remainingIndexes = segmentPlan.indices.filter { !reviewIndexes.contains($0) }
-            if !remainingIndexes.isEmpty,
-               TranscriptionQualityEvaluator.requiresFullGeneralReview(
-                   currentSegments(),
-                   reviewedIndexes: reviewIndexes
-               ) {
-                let remainingSegments = remainingIndexes.map { segmentPlan[$0] }
-                let remainingCandidates = try transcribeCandidateSegmentsSynchronously(
-                    audioFileURL: audioFileURL,
-                    languageCode: "th",
-                    segments: remainingSegments,
-                    modelURL: generalModelURL,
-                    profile: .generalBeam,
-                    beamSize: 5,
-                    temporaryDirectory: directory.appendingPathComponent("general-full", isDirectory: true),
-                    token: token
-                )
-                for (index, candidate) in zip(remainingIndexes, remainingCandidates) {
-                    candidatesByIndex[index, default: []].append(candidate)
-                }
-            }
-
-            return currentSegments()
         }.value
     }
 
@@ -210,7 +94,7 @@ enum LocalWhisperRunner {
         guard let executableURL = WhisperModelResolver.cliExecutableURL() else {
             throw LocalWhisperError.executableNotFound
         }
-        guard let modelURL = WhisperModelResolver.modelURL() else {
+        guard let modelURL = WhisperModelResolver.generalModelURL else {
             throw LocalWhisperError.modelNotFound
         }
 
@@ -269,7 +153,6 @@ enum LocalWhisperRunner {
         temporaryDirectory directory: URL,
         durationSeconds: Int? = nil,
         offsetMilliseconds: Int? = nil,
-        modelURL explicitModelURL: URL? = nil,
         beamSize: Int = 5,
         token: ProcessCancellationToken
     ) throws -> WhisperRunResult {
@@ -277,8 +160,7 @@ enum LocalWhisperRunner {
         guard let executableURL = WhisperModelResolver.cliExecutableURL() else {
             throw LocalWhisperError.executableNotFound
         }
-        // 按语言选模型：泰语用专精微调，其他用通用模型
-        guard let modelURL = explicitModelURL ?? WhisperModelResolver.modelURL(for: languageCode) else {
+        guard let modelURL = WhisperModelResolver.generalModelURL else {
             throw LocalWhisperError.modelNotFound
         }
 
@@ -328,115 +210,9 @@ enum LocalWhisperRunner {
         // 写出非法 UTF-8 字节。严格 String(contentsOf:encoding:.utf8) 会抛 NSFileReadCorruptFileError，
         // 让整条视频转写失败。改为有损解码（非法字节转 U+FFFD），后续合并里再清掉。
         let text = String(decoding: try Data(contentsOf: transcriptURL), as: UTF8.self)
-        let jsonURL = outputStem.appendingPathExtension("json")
         return WhisperRunResult(
-            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
-            meanTokenProbability: meanTokenProbability(from: jsonURL)
+            text: text.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-    }
-
-    private static func transcribeCandidateSegmentsSynchronously(
-        audioFileURL: URL,
-        languageCode: String,
-        segments: [(offset: Double, duration: Double)],
-        modelURL: URL,
-        profile: WhisperDecoderProfile,
-        beamSize: Int,
-        temporaryDirectory directory: URL,
-        token: ProcessCancellationToken
-    ) throws -> [WhisperSegmentCandidate] {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        final class SharedState: @unchecked Sendable {
-            let lock = NSLock()
-            var results: [Int: WhisperSegmentCandidate] = [:]
-            var firstError: Error?
-        }
-        let state = SharedState()
-        let maxConcurrent = 2
-        var batchStart = 0
-
-        while batchStart < segments.count {
-            try token.check()
-            let batchEnd = min(batchStart + maxConcurrent, segments.count)
-            let batchSize = batchEnd - batchStart
-            let currentBatchStart = batchStart
-            DispatchQueue.concurrentPerform(iterations: batchSize) { batchIndex in
-                let index = currentBatchStart + batchIndex
-                let segment = segments[index]
-                let segmentDirectory = directory.appendingPathComponent("seg-\(index)", isDirectory: true)
-                do {
-                    try FileManager.default.createDirectory(at: segmentDirectory, withIntermediateDirectories: true)
-                    let result = try transcribeSynchronously(
-                        audioFileURL: audioFileURL,
-                        languageCode: languageCode,
-                        temporaryDirectory: segmentDirectory,
-                        durationSeconds: Int(ceil(segment.duration)),
-                        offsetMilliseconds: Int((segment.offset * 1_000).rounded()),
-                        modelURL: modelURL,
-                        beamSize: beamSize,
-                        token: token
-                    )
-                    let candidate = WhisperSegmentCandidate(
-                        profile: profile,
-                        duration: segment.duration,
-                        text: result.text,
-                        meanTokenProbability: result.meanTokenProbability
-                    )
-                    state.lock.lock()
-                    state.results[index] = candidate
-                    state.lock.unlock()
-                } catch {
-                    state.lock.lock()
-                    if state.firstError == nil { state.firstError = error }
-                    state.lock.unlock()
-                }
-            }
-            if let error = state.firstError { throw error }
-            batchStart = batchEnd
-        }
-
-        return segments.indices.compactMap { state.results[$0] }
-    }
-
-    private static func makeSegmentPlan(duration: Double) -> [(offset: Double, duration: Double)] {
-        guard duration > 25 else { return [(0, duration)] }
-        let chunkSeconds = 20.0
-        let stepSeconds = 18.0
-        var segments: [(offset: Double, duration: Double)] = []
-        var offset = 0.0
-        while offset < duration {
-            segments.append((offset, min(chunkSeconds, duration - offset)))
-            offset += stepSeconds
-        }
-        return segments
-    }
-
-    private static func meanTokenProbability(from jsonURL: URL) -> Double? {
-        guard let data = try? Data(contentsOf: jsonURL),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let transcriptions = root["transcription"] as? [[String: Any]] else {
-            return nil
-        }
-        let probabilities = transcriptions.flatMap { transcription in
-            (transcription["tokens"] as? [[String: Any]] ?? []).compactMap { $0["p"] as? Double }
-        }
-        guard !probabilities.isEmpty else { return nil }
-        return probabilities.reduce(0, +) / Double(probabilities.count)
-    }
-
-    private static func audioDurationSeconds(audioFileURL: URL) async -> Double? {
-        let asset = AVURLAsset(url: audioFileURL)
-        let duration = try? await withTaskCancellationHandler {
-            try await AsyncOperationTimeout.run(timeout: 15) {
-                try await asset.load(.duration)
-            }
-        } onCancel: {
-            asset.cancelLoading()
-        }
-        guard let duration else { return nil }
-        let seconds = CMTimeGetSeconds(duration)
-        return seconds.isFinite && seconds > 0 ? seconds : nil
     }
 
     static func whisperLanguageCode(for language: LanguageOption) -> String {
@@ -451,7 +227,6 @@ enum LocalWhisperRunner {
 enum LocalWhisperError: LocalizedError {
     case executableNotFound
     case modelNotFound
-    case tooManySegments
     case transcriptionFailed(String)
 
     var errorDescription: String? {
@@ -461,8 +236,6 @@ enum LocalWhisperError: LocalizedError {
         case .modelNotFound:
             let dir = WhisperModelResolver.preferredModelDirectory.path(percentEncoded: false)
             return "未找到 Whisper 模型文件。请将 ggml-*.bin 模型文件放到：\(dir)"
-        case .tooManySegments:
-            return "视频分段数量超过本地 Whisper 处理上限，请缩短视频后重试。"
         case let .transcriptionFailed(message):
             return "Whisper 转写失败：\(message)"
         }

@@ -51,23 +51,13 @@ enum AppText {
     static let noEffectiveSpeechDescription = "这段视频可能没有可转写的人声，或 Whisper 只生成了重复幻觉文本。请手动填写商品类型，或换有清晰口播的视频。"
     static let visualSalesCopyNotice = "未检测到有效口播。以下内容不是口播翻译，而是根据视频画面推断生成的中文口播文案。"
     static let visualFramesMissing = "没有可用于画面理解的视频截图。"
-    static let transcriptionQualitySettings = "泰语转写质量"
-    static let elevenLabsAutomaticReviewDescription = "本地候选无法可靠裁决时，仅在本次预留免费额度充足时用 ElevenLabs Scribe v2 复核。"
-    static let elevenLabsAPIKeyPlaceholder = "粘贴 ElevenLabs API key"
-    static let elevenLabsAPIKeyNotConfigured = "未配置 ElevenLabs API key"
-    static let elevenLabsAPIKeySaved = "ElevenLabs API key 已保存到 Keychain。"
-    static let elevenLabsAPIKeyRemoved = "ElevenLabs API key 已删除。"
-    static let elevenLabsQualityRejected = "ElevenLabs 结果未通过质量检查"
-    static let elevenLabsDurationUnavailable = "无法读取音频时长，为避免额度超支未调用 ElevenLabs"
-    static let cloudThaiTranscriptionConsent = "允许云端泰语复核"
+    static let processingPermissions = "处理权限"
     static let cloudVideoFramesConsent = "允许上传视频截图做商品识别"
     static let visualSalesCopyConsent = "无口播时允许生成画面文案"
-    static let cloudConsentHelp = "保存 API key 不等于授权上传。开启后，本次任务才会按对应开关发送音频或视频截图。"
+    static let cloudConsentHelp = "保存 API key 不等于授权上传。开启后，本次任务才会按对应开关发送视频截图。"
     static let executionPlanTitle = "本次处理计划"
-    static func localWhisperCloudDisabled(_ description: String) -> String {
-        "\(description) \(cloudThaiTranscriptionConsent)未开启，本次保留本地结果。"
-    }
     static let localWhisperSource = "本地 Whisper 转写结果。"
+    static let malayGreedyWhisperSource = "本地 Whisper 马来语备用解码结果。"
 
     static let savedTranscripts = "资料库"
     static let manageSavedTranscripts = "管理已保存记录"
@@ -136,36 +126,8 @@ enum AppText {
         "正在用本地 Whisper 转写 \(fileName)..."
     }
 
-    static func thaiDualWhisperTranscribing(_ fileName: String) -> String {
-        "正在优先用泰语专用 Whisper 转写 \(fileName)，必要时由通用模型复核..."
-    }
-
-    static func elevenLabsReviewing(_ fileName: String) -> String {
-        "本地候选无法可靠裁决，正在用 ElevenLabs Scribe v2 复核 \(fileName)..."
-    }
-
-    static func thaiLocalWhisperSource(specialistSegments: Int, generalSegments: Int) -> String {
-        switch (specialistSegments, generalSegments) {
-        case (_, 0):
-            "本地 Whisper 泰语专用模型转写：\(specialistSegments) 段。"
-        case (0, _):
-            "本地 Whisper 通用模型转写：\(generalSegments) 段。"
-        default:
-            "本地 Whisper 双模型裁决：泰语专用 \(specialistSegments) 段，通用模型 \(generalSegments) 段。"
-        }
-    }
-
-    static func localWhisperCloudUnavailable(_ localDescription: String, reason: String) -> String {
-        "\(localDescription) ElevenLabs 未采用：\(reason)。"
-    }
-
-    static func elevenLabsSource(reasons: [String]) -> String {
-        let reason = reasons.joined(separator: "；")
-        return "ElevenLabs Scribe v2 自动复核结果。触发原因：\(reason)"
-    }
-
-    static func elevenLabsQuotaInsufficient(remaining: Int, required: Int) -> String {
-        "免费额度不足，剩余 \(remaining) credits，本次预计需要 \(required) credits"
+    static func malayWhisperRetrying(_ fileName: String) -> String {
+        "马来语首次转写质量不足，正在用备用解码重试 \(fileName)..."
     }
 
     static func inferringProductContext(_ fileName: String) -> String {

@@ -4,7 +4,6 @@ import VidLingoCore
 struct SidebarView: View {
     @Bindable var session: TranslationSessionStore
     @State private var apiKey = ""
-    @State private var elevenLabsAPIKey = ""
     @State private var isLibraryPresented = false
 
     var body: some View {
@@ -12,7 +11,7 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: 16) {
                 appHeader
                 languageSection
-                transcriptionQualitySection
+                processingPermissionsSection
                 modelSection
                 librarySection
             }
@@ -24,18 +23,12 @@ struct SidebarView: View {
         }
     }
 
-    private var transcriptionQualitySection: some View {
+    private var processingPermissionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(AppText.transcriptionQualitySettings)
+            Text(AppText.processingPermissions)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            Text(AppText.elevenLabsAutomaticReviewDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Toggle(AppText.cloudThaiTranscriptionConsent, isOn: $session.allowsCloudThaiTranscription)
-                .disabled(session.isOfflineVideoProcessing)
             Toggle(AppText.cloudVideoFramesConsent, isOn: $session.allowsCloudVideoFrames)
                 .disabled(session.isOfflineVideoProcessing)
             Toggle(AppText.visualSalesCopyConsent, isOn: $session.allowsVisualSalesCopy)
@@ -43,27 +36,6 @@ struct SidebarView: View {
             Text(AppText.cloudConsentHelp)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-
-            SecureField(AppText.elevenLabsAPIKeyPlaceholder, text: $elevenLabsAPIKey)
-                .textFieldStyle(.roundedBorder)
-
-            HStack {
-                Text(AppText.keychainAvailabilityText(session.elevenLabsAPIKeyAvailability))
-                    .font(.caption)
-                    .foregroundStyle(session.elevenLabsAPIKeyAvailability == .configured ? .green : .secondary)
-                Spacer()
-                Button(AppText.saveTranslationAPIKey) {
-                    session.saveElevenLabsAPIKey(elevenLabsAPIKey)
-                    elevenLabsAPIKey = ""
-                }
-                .disabled(elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            Button(AppText.removeTranslationAPIKey) {
-                session.removeElevenLabsAPIKey()
-                elevenLabsAPIKey = ""
-            }
-            .disabled(!session.hasElevenLabsAPIKey)
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

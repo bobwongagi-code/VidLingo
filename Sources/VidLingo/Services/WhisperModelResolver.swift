@@ -18,8 +18,6 @@ enum WhisperModelResolver {
         "ggml-tiny.bin"
     ]
 
-    private static let thaiModelNames = ["ggml-pathumma-th-large-v3-q5_0.bin"]
-
     private static var modelDirectories: [URL] {
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser
@@ -45,19 +43,8 @@ enum WhisperModelResolver {
         candidatePaths(for: generalModelNames)
     }
 
-    static func modelURL(for languageCode: String? = nil) -> URL? {
-        if languageCode == "th", let thaiModelURL {
-            return thaiModelURL
-        }
-        return generalModelURL
-    }
-
     static var generalModelURL: URL? {
         candidatePaths(for: generalModelNames).first(where: isUsableModel)
-    }
-
-    static var thaiModelURL: URL? {
-        candidatePaths(for: thaiModelNames).first(where: isUsableModel)
     }
 
     static var preferredModelDirectory: URL {

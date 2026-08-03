@@ -11,8 +11,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Extract speech audio locally with `ffmpeg`.
 - Transcribe locally with `whisper.cpp`.
 - Detect the spoken language from Whisper when auto detection is enabled.
-- For Thai, use the Pathumma specialist model first and selectively review uncertain segments with the general model.
-- Optionally use ElevenLabs Scribe v2 as a quota-guarded fallback when local Thai candidates cannot be resolved reliably.
+- If a Malay transcript fails the local quality check, retry once with greedy decoding before using the no-speech fallback.
 - Translate the full transcript with a short-video e-commerce prompt.
 - Always translate to Simplified Chinese; the spoken input language can be detected or selected manually.
 - Choose DeepSeek, OpenAI, Qwen, OpenRouter / Claude, Anthropic / Claude, or a custom OpenAI-compatible endpoint.
@@ -26,10 +25,8 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - `ffmpeg` available on `PATH`.
 - `whisper-cli` or `whisper-cpp` from `whisper.cpp` available on `PATH`; `VIDLINGO_WHISPER_CLI` can specify an exact path.
 - A local general Whisper model, preferably `ggml-large-v3-q5_0.bin`.
-- For Thai, optionally install `ggml-pathumma-th-large-v3-q5_0.bin`; VidLingo uses it first and falls back to the general model when it is unavailable.
 - An API key for the selected translation provider. Saving a key does not authorize audio or frame uploads.
-- Cloud Thai review, cloud frame uploads, and no-speech visual copy are separate opt-in switches and default to off.
-- An optional ElevenLabs API key for rare Thai transcription fallback only. VidLingo checks the remaining credit pool before sending audio.
+- Cloud frame uploads and no-speech visual copy are separate opt-in switches and default to off.
 - Custom endpoints must use HTTPS by default. Loopback HTTP is accepted only with `VIDLINGO_ALLOW_LOCAL_HTTP=1`.
 
 VidLingo looks for Whisper models in:

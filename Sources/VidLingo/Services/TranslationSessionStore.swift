@@ -7,7 +7,6 @@ import VidLingoCore
 private enum SettingsKey {
     static let sourceLanguageID = "sourceLanguageID"
     static let isSourceAutoDetectionEnabled = "isSourceAutoDetectionEnabled"
-    static let allowsCloudThaiTranscription = "allowsCloudThaiTranscription"
     static let allowsCloudVideoFrames = "allowsCloudVideoFrames"
     static let allowsVisualSalesCopy = "allowsVisualSalesCopy"
     static let translationProviderID = "translationProviderID"
@@ -45,12 +44,7 @@ final class TranslationSessionStore {
         didSet { persistSelectedSettings() }
     }
     var translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: .deepSeek)
-    var elevenLabsAPIKeyAvailability = ElevenLabsAPIKeyStore.availability
     var hasTranslationAPIKey: Bool { translationAPIKeyAvailability == .configured }
-    var hasElevenLabsAPIKey: Bool { elevenLabsAPIKeyAvailability == .configured }
-    var allowsCloudThaiTranscription = false {
-        didSet { persistSelectedSettings() }
-    }
     var allowsCloudVideoFrames = false {
         didSet { persistSelectedSettings() }
     }
@@ -73,9 +67,6 @@ final class TranslationSessionStore {
 
     var offlineVideoExecutionPlan: String {
         var steps = ["本地提取音频", "本地 Whisper 完整转写"]
-        if allowsCloudThaiTranscription {
-            steps.append("泰语不确定时，可能上传音频到 ElevenLabs Scribe v2（按额度计费）")
-        }
         let supportsVision = LLMTranslationService.supportsProductContextFrames(
             provider: translationProvider,
             modelName: translationModelName
@@ -167,7 +158,6 @@ final class TranslationSessionStore {
             customBaseURL: customTranslationBaseURL,
             shouldAutoDetectLanguage: isSourceAutoDetectionEnabled,
             shouldInferProductContext: isProductContextInferenceEnabled,
-            allowsCloudThaiTranscription: allowsCloudThaiTranscription,
             allowsCloudVideoFrames: allowsCloudVideoFrames,
             allowsVisualSalesCopy: allowsVisualSalesCopy
         )
@@ -203,7 +193,6 @@ final class TranslationSessionStore {
                         customBaseURL: params.customBaseURL,
                         shouldAutoDetectLanguage: params.shouldAutoDetectLanguage,
                         shouldInferProductContext: params.shouldInferProductContext,
-                        allowsCloudThaiTranscription: params.allowsCloudThaiTranscription,
                         allowsCloudVideoFrames: params.allowsCloudVideoFrames,
                         allowsVisualSalesCopy: params.allowsVisualSalesCopy
                     ),
@@ -220,9 +209,6 @@ final class TranslationSessionStore {
                         }
                     }
                 )
-                if let availability = result.elevenLabsAPIKeyAvailability {
-                    elevenLabsAPIKeyAvailability = availability
-                }
                 transcriptionSourceDescription = result.sourceDescription
                 if !result.productContext.isEmpty {
                     offlineVideoProductContext = result.productContext
@@ -272,7 +258,6 @@ final class TranslationSessionStore {
         let customBaseURL: String
         let shouldAutoDetectLanguage: Bool
         let shouldInferProductContext: Bool
-        let allowsCloudThaiTranscription: Bool
         let allowsCloudVideoFrames: Bool
         let allowsVisualSalesCopy: Bool
     }
@@ -302,32 +287,6 @@ final class TranslationSessionStore {
             statusMessage = AppText.translationAPIKeyRemoved(translationProvider.title)
         } catch let error as TranslationAPIKeyStoreError {
             translationAPIKeyAvailability = error.availability
-            statusMessage = error.localizedDescription
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
-
-    func saveElevenLabsAPIKey(_ key: String) {
-        do {
-            try ElevenLabsAPIKeyStore.saveAPIKey(key)
-            elevenLabsAPIKeyAvailability = .configured
-            statusMessage = AppText.elevenLabsAPIKeySaved
-        } catch let error as ElevenLabsAPIKeyStoreError {
-            elevenLabsAPIKeyAvailability = error.availability
-            statusMessage = error.localizedDescription
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
-
-    func removeElevenLabsAPIKey() {
-        do {
-            try ElevenLabsAPIKeyStore.deleteAPIKey()
-            elevenLabsAPIKeyAvailability = .missing
-            statusMessage = AppText.elevenLabsAPIKeyRemoved
-        } catch let error as ElevenLabsAPIKeyStoreError {
-            elevenLabsAPIKeyAvailability = error.availability
             statusMessage = error.localizedDescription
         } catch {
             statusMessage = error.localizedDescription
@@ -486,7 +445,6 @@ final class TranslationSessionStore {
         if defaults.object(forKey: SettingsKey.isSourceAutoDetectionEnabled) != nil {
             isSourceAutoDetectionEnabled = defaults.bool(forKey: SettingsKey.isSourceAutoDetectionEnabled)
         }
-        allowsCloudThaiTranscription = defaults.bool(forKey: SettingsKey.allowsCloudThaiTranscription)
         allowsCloudVideoFrames = defaults.bool(forKey: SettingsKey.allowsCloudVideoFrames)
         allowsVisualSalesCopy = defaults.bool(forKey: SettingsKey.allowsVisualSalesCopy)
         if let providerID = defaults.string(forKey: SettingsKey.translationProviderID),
@@ -501,7 +459,6 @@ final class TranslationSessionStore {
         ).url.absoluteString) ?? ""
         translationModelName = storedTranslationModelName(for: translationProvider)
         translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: translationProvider)
-        elevenLabsAPIKeyAvailability = ElevenLabsAPIKeyStore.availability
     }
 
     private func persistSelectedSettings() {
@@ -509,7 +466,6 @@ final class TranslationSessionStore {
         let defaults = UserDefaults.standard
         defaults.set(sourceLanguage.id, forKey: SettingsKey.sourceLanguageID)
         defaults.set(isSourceAutoDetectionEnabled, forKey: SettingsKey.isSourceAutoDetectionEnabled)
-        defaults.set(allowsCloudThaiTranscription, forKey: SettingsKey.allowsCloudThaiTranscription)
         defaults.set(allowsCloudVideoFrames, forKey: SettingsKey.allowsCloudVideoFrames)
         defaults.set(allowsVisualSalesCopy, forKey: SettingsKey.allowsVisualSalesCopy)
         defaults.set(translationProvider.rawValue, forKey: SettingsKey.translationProviderID)

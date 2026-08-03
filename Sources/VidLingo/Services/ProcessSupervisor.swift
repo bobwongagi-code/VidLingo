@@ -134,7 +134,6 @@ enum MediaProcessingLimits {
     static let maxAudioBytes: Int64 = 256 * 1_024 * 1_024
     static let totalTaskTimeout: TimeInterval = 20 * 60
     static let childProcessTimeout: TimeInterval = 10 * 60
-    static let maxThaiWhisperSegments = 48
 }
 
 enum ProcessSupervisor {

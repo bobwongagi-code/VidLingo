@@ -12,7 +12,6 @@ struct OfflineTranslationRunRequest: Sendable {
     let customBaseURL: String
     let shouldAutoDetectLanguage: Bool
     let shouldInferProductContext: Bool
-    let allowsCloudThaiTranscription: Bool
     let allowsCloudVideoFrames: Bool
     let allowsVisualSalesCopy: Bool
 }
@@ -25,7 +24,6 @@ struct OfflineTranslationRunResult: Sendable {
     let productContext: String
     let artifactKind: TranscriptArtifactKind?
     let frameData: [Data]
-    let elevenLabsAPIKeyAvailability: KeychainAvailability?
 }
 
 struct OfflineTranslationCoordinator {
@@ -41,7 +39,6 @@ struct OfflineTranslationCoordinator {
         var audioURL: URL?
         var stageTimings = [OfflineTranslationStageTiming]()
         var detectedLanguageID: String?
-        var thaiDiagnostics: ThaiTranscriptionDiagnostics?
         var diagnosticOutcome = "failed"
         var diagnosticError: String?
         var videoDurationSeconds: Int?
@@ -61,7 +58,6 @@ struct OfflineTranslationCoordinator {
                 videoDurationSeconds: videoDurationSeconds,
                 outcome: diagnosticOutcome,
                 stages: stageTimings,
-                thai: thaiDiagnostics,
                 errorDescription: diagnosticError
             ))
         }
@@ -95,12 +91,10 @@ struct OfflineTranslationCoordinator {
                 audioURL: audioURL,
                 videoURL: request.videoURL,
                 language: sourceLanguage,
-                request: request,
                 token: token,
                 reportProgress: reportProgress
             )
             recordStage("transcription", startedAt: transcriptionStartedAt)
-            thaiDiagnostics = transcription.diagnostics
             await reportTranscription(transcription.sourceText, transcription.sourceDescription)
 
             guard SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
@@ -150,8 +144,7 @@ struct OfflineTranslationCoordinator {
                 sourceDescription: transcription.sourceDescription,
                 productContext: productContext,
                 artifactKind: .transcriptionTranslation,
-                frameData: [],
-                elevenLabsAPIKeyAvailability: transcription.elevenLabsAPIKeyAvailability
+                frameData: []
             )
         } catch ProcessSupervisorError.cancelled {
             diagnosticOutcome = "cancelled"
@@ -203,160 +196,44 @@ struct OfflineTranslationCoordinator {
         audioURL: URL,
         videoURL: URL,
         language: LanguageOption,
-        request: OfflineTranslationRunRequest,
         token: ProcessCancellationToken,
         reportProgress: @escaping ProgressHandler
     ) async throws -> TranscriptionResult {
         try token.check()
         await reportProgress(AppText.offlineVideoTranscribing(videoURL.lastPathComponent))
-        guard language.id == "th-TH" else {
-            let rawTranscript = try await LocalWhisperRunner.transcribe(
-                audioFileURL: audioURL,
-                language: language,
-                token: token
-            )
-            let sourceText = TranscriptTextProcessor.organizeTranscript(rawTranscript, languageID: language.id)
-            guard !sourceText.isEmpty else {
-                throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
-            }
-            return TranscriptionResult(
-                sourceText: sourceText,
-                sourceDescription: AppText.localWhisperSource,
-                diagnostics: nil,
-                elevenLabsAPIKeyAvailability: nil
-            )
-        }
-
-        await reportProgress(AppText.thaiDualWhisperTranscribing(videoURL.lastPathComponent))
-        let candidates = try await LocalWhisperRunner.transcribeThaiCandidates(audioFileURL: audioURL, token: token)
-        let assessment = TranscriptionQualityEvaluator.assess(candidates)
-        let localText = TranscriptTextProcessor.organizeTranscript(assessment.selectedText, languageID: language.id)
-        let localDescription = localDescription(for: assessment)
-        let localDiagnostics = ThaiTranscriptionDiagnostics(
-            qualityPolicyVersion: TranscriptionQualityEvaluator.policyVersion,
-            segmentCount: assessment.segments.count,
-            generalReviewSegmentIndexes: assessment.generalReviewSegmentIndexes,
-            usedFullGeneralReview: assessment.usedFullGeneralReview,
-            cloudReasons: assessment.cloudReasons,
-            usedElevenLabs: false
+        let primaryText = try await transcribeWithWhisper(
+            audioURL: audioURL,
+            language: language,
+            token: token,
+            beamSize: 5
         )
-
-        guard assessment.shouldUseCloud else {
-            return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: localDescription,
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: nil
-            )
+        guard !primaryText.isEmpty else {
+            throw LocalWhisperError.transcriptionFailed("Whisper returned empty text.")
         }
-        guard request.allowsCloudThaiTranscription else {
+
+        if SpeechTranscriptValidator.hasEffectiveSpeechTranscript(primaryText, language: language)
+            || language.id != "ms-MY" {
             return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudDisabled(localDescription),
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: nil
+                sourceText: primaryText,
+                sourceDescription: AppText.localWhisperSource
             )
         }
 
-        let apiKey: String?
-        let availability: KeychainAvailability
+        await reportProgress(AppText.malayWhisperRetrying(videoURL.lastPathComponent))
         do {
-            apiKey = try ElevenLabsAPIKeyStore.readAPIKey()
-            availability = apiKey?.isEmpty == false ? .configured : .missing
-        } catch let error as ElevenLabsAPIKeyStoreError {
-            return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: AppText.keychainAvailabilityText(error.availability)
-                ),
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: error.availability
-            )
-        } catch {
-            return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: AppText.keychainAvailabilityText(.corrupted)
-                ),
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: .corrupted
-            )
-        }
-        guard let apiKey, !apiKey.isEmpty else {
-            return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: AppText.elevenLabsAPIKeyNotConfigured
-                ),
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: availability
-            )
-        }
-
-        let duration = await Self.audioDurationSeconds(for: audioURL)
-        guard duration > 0 else {
-            return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: AppText.elevenLabsDurationUnavailable
-                ),
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: availability
-            )
-        }
-
-        let estimatedCredits = ElevenLabsTranscriber.estimatedCredits(duration: duration)
-        do {
-            let quota = try await ElevenLabsTranscriber.quota(apiKey: apiKey, token: token)
-            guard quota.remainingCredits >= estimatedCredits else {
-                return TranscriptionResult(
-                    sourceText: localText,
-                    sourceDescription: AppText.localWhisperCloudUnavailable(
-                        localDescription,
-                        reason: AppText.elevenLabsQuotaInsufficient(
-                            remaining: quota.remainingCredits,
-                            required: estimatedCredits
-                        )
-                    ),
-                    diagnostics: localDiagnostics,
-                    elevenLabsAPIKeyAvailability: availability
-                )
-            }
-            await reportProgress(AppText.elevenLabsReviewing(videoURL.lastPathComponent))
-            let cloudTranscript = try await ElevenLabsTranscriber.transcribeThai(
+            let fallbackText = try await transcribeWithWhisper(
                 audioURL: audioURL,
-                apiKey: apiKey,
-                token: token
+                language: language,
+                token: token,
+                beamSize: 1
             )
-            let cloudText = TranscriptTextProcessor.organizeTranscript(cloudTranscript.text, languageID: language.id)
-            guard ElevenLabsTranscriber.isTrustedTeacher(cloudTranscript), !cloudText.isEmpty else {
+            if !fallbackText.isEmpty,
+               SpeechTranscriptValidator.hasEffectiveSpeechTranscript(fallbackText, language: language) {
                 return TranscriptionResult(
-                    sourceText: localText,
-                    sourceDescription: AppText.localWhisperCloudUnavailable(
-                        localDescription,
-                        reason: AppText.elevenLabsQualityRejected
-                    ),
-                    diagnostics: localDiagnostics,
-                    elevenLabsAPIKeyAvailability: availability
+                    sourceText: fallbackText,
+                    sourceDescription: AppText.malayGreedyWhisperSource
                 )
             }
-            return TranscriptionResult(
-                sourceText: cloudText,
-                sourceDescription: AppText.elevenLabsSource(reasons: assessment.cloudReasons),
-                diagnostics: ThaiTranscriptionDiagnostics(
-                    qualityPolicyVersion: TranscriptionQualityEvaluator.policyVersion,
-                    segmentCount: localDiagnostics.segmentCount,
-                    generalReviewSegmentIndexes: localDiagnostics.generalReviewSegmentIndexes,
-                    usedFullGeneralReview: localDiagnostics.usedFullGeneralReview,
-                    cloudReasons: localDiagnostics.cloudReasons,
-                    usedElevenLabs: true
-                ),
-                elevenLabsAPIKeyAvailability: availability
-            )
         } catch ProcessSupervisorError.cancelled {
             throw ProcessSupervisorError.cancelled
         } catch ProcessSupervisorError.deadlineExceeded {
@@ -366,16 +243,28 @@ struct OfflineTranslationCoordinator {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            return TranscriptionResult(
-                sourceText: localText,
-                sourceDescription: AppText.localWhisperCloudUnavailable(
-                    localDescription,
-                    reason: error.localizedDescription
-                ),
-                diagnostics: localDiagnostics,
-                elevenLabsAPIKeyAvailability: availability
-            )
+            // 备用解码失败时保留首次结果，让统一的无口播兜底流程继续处理。
         }
+
+        return TranscriptionResult(
+            sourceText: primaryText,
+            sourceDescription: AppText.localWhisperSource
+        )
+    }
+
+    private func transcribeWithWhisper(
+        audioURL: URL,
+        language: LanguageOption,
+        token: ProcessCancellationToken,
+        beamSize: Int
+    ) async throws -> String {
+        let rawTranscript = try await LocalWhisperRunner.transcribe(
+            audioFileURL: audioURL,
+            language: language,
+            token: token,
+            beamSize: beamSize
+        )
+        return TranscriptTextProcessor.organizeTranscript(rawTranscript, languageID: language.id)
     }
 
     private func generateNoSpeechResult(
@@ -397,8 +286,7 @@ struct OfflineTranslationCoordinator {
                 sourceDescription: AppText.originalDescription,
                 productContext: request.initialProductContext,
                 artifactKind: nil,
-                frameData: [],
-                elevenLabsAPIKeyAvailability: nil
+                frameData: []
             )
         }
 
@@ -415,8 +303,7 @@ struct OfflineTranslationCoordinator {
                 sourceDescription: AppText.originalDescription,
                 productContext: request.initialProductContext,
                 artifactKind: nil,
-                frameData: [],
-                elevenLabsAPIKeyAvailability: nil
+                frameData: []
             )
         }
         do {
@@ -437,8 +324,7 @@ struct OfflineTranslationCoordinator {
                 sourceDescription: AppText.originalDescription,
                 productContext: request.initialProductContext,
                 artifactKind: .visualGeneratedCopy,
-                frameData: frames,
-                elevenLabsAPIKeyAvailability: nil
+                frameData: frames
             )
         } catch let error as LLMTranslationError where error.allowsVisionFallback {
             return OfflineTranslationRunResult(
@@ -448,8 +334,7 @@ struct OfflineTranslationCoordinator {
                 sourceDescription: AppText.originalDescription,
                 productContext: request.initialProductContext,
                 artifactKind: nil,
-                frameData: [],
-                elevenLabsAPIKeyAvailability: nil
+                frameData: []
             )
         }
     }
@@ -498,14 +383,6 @@ struct OfflineTranslationCoordinator {
         return productContext
     }
 
-    private func localDescription(for assessment: LocalTranscriptionAssessment) -> String {
-        let profiles = assessment.segments.compactMap(\.selectedProfile)
-        return AppText.thaiLocalWhisperSource(
-            specialistSegments: profiles.filter { $0 == .thaiSpecialistGreedy }.count,
-            generalSegments: profiles.filter { $0 == .generalBeam }.count
-        )
-    }
-
     private static func preflightVideo(_ videoURL: URL, token: ProcessCancellationToken) async throws -> Double {
         try token.check()
         let values = try videoURL.resourceValues(forKeys: [.fileSizeKey])
@@ -530,19 +407,6 @@ struct OfflineTranslationCoordinator {
         return seconds
     }
 
-    private static func audioDurationSeconds(for audioURL: URL) async -> Double {
-        let asset = AVURLAsset(url: audioURL)
-        let duration = try? await withTaskCancellationHandler {
-            try await AsyncOperationTimeout.run(timeout: 15) {
-                try await asset.load(.duration)
-            }
-        } onCancel: {
-            asset.cancelLoading()
-        }
-        let seconds = duration.map(CMTimeGetSeconds) ?? 0
-        return seconds.isFinite && seconds > 0 ? seconds : 0
-    }
-
     private static func durationText(_ seconds: Double) -> String {
         String(format: "%d:%02d", Int(seconds.rounded()) / 60, Int(seconds.rounded()) % 60)
     }
@@ -550,7 +414,5 @@ struct OfflineTranslationCoordinator {
     private struct TranscriptionResult: Sendable {
         let sourceText: String
         let sourceDescription: String
-        let diagnostics: ThaiTranscriptionDiagnostics?
-        let elevenLabsAPIKeyAvailability: KeychainAvailability?
     }
 }
