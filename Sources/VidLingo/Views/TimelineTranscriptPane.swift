@@ -41,19 +41,12 @@ struct TimelineTranscriptPane: View {
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    tableHeader
+                    Divider()
+
                     ForEach(segments) { segment in
-                        if let seekPreview {
-                            Button {
-                                seekPreview(segment.startMilliseconds)
-                            } label: {
-                                segmentRow(segment)
-                            }
-                            .buttonStyle(.plain)
-                            .help(AppText.seekTimelineSegment)
-                        } else {
-                            segmentRow(segment)
-                        }
+                        segmentRow(segment)
                         Divider()
                     }
                 }
@@ -77,31 +70,62 @@ struct TimelineTranscriptPane: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    private var tableHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(AppText.timelineTimeColumn)
+                .frame(width: 112, alignment: .leading)
+            Text(AppText.timelineSourceColumn)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(AppText.timelineTranslationColumn)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 8)
+    }
+
     @ViewBuilder
     private func segmentRow(_ segment: TimedTranscriptSegment) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(Self.timeRange(for: segment))
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 92, alignment: .leading)
+            timeCell(for: segment)
+                .frame(width: 112, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(segment.sourceText)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                if let translatedText = segment.translatedText,
-                   !translatedText.isEmpty {
-                    Text(translatedText)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
+            Text(segment.sourceText)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(segment.translatedText?.isEmpty == false
+                 ? segment.translatedText!
+                 : AppText.timelineMissingTranslation)
+                .font(.body)
+                .foregroundStyle(segment.hasTranslation ? .secondary : .tertiary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func timeCell(for segment: TimedTranscriptSegment) -> some View {
+        if let seekPreview {
+            Button {
+                seekPreview(segment.startMilliseconds)
+            } label: {
+                Text(Self.timeRange(for: segment))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .help(AppText.seekTimelineSegment)
+        } else {
+            Text(Self.timeRange(for: segment))
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+        }
     }
 
     private func copyTimeline() {

@@ -255,16 +255,7 @@ actor LLMTranslationService {
                 segments: segments
             )
         } catch TimedTranslationParsingError.invalidOutput {
-            return try await fallbackTimedTranslation(
-                text,
-                source: source,
-                target: target,
-                productContext: productContext,
-                provider: provider,
-                modelName: modelName,
-                customBaseURL: customBaseURL,
-                token: token
-            )
+            return unalignedTranslation(from: output)
         }
     }
 
@@ -334,16 +325,7 @@ actor LLMTranslationService {
             from: output,
             expectedIDs: timedSegments.map(\.id)
         ) else {
-            return try await fallbackTimedTranslation(
-                text,
-                source: source,
-                target: target,
-                productContext: productContext,
-                provider: .qwen,
-                modelName: model,
-                customBaseURL: customBaseURL,
-                token: token
-            )
+            return unalignedTranslation(from: output)
         }
 
         let translationsByID = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.translation) })
@@ -355,6 +337,14 @@ actor LLMTranslationService {
         return TimedTranscriptTranslation(
             text: segments.compactMap(\.translatedText).joined(separator: "\n"),
             segments: segments
+        )
+    }
+
+    private func unalignedTranslation(from output: String) -> TimedTranscriptTranslation {
+        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TimedTranscriptTranslation(
+            text: text.isEmpty ? "模型没有返回可对齐的译文。" : text,
+            segments: []
         )
     }
 

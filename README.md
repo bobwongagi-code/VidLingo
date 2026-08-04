@@ -15,7 +15,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Always translate to Simplified Chinese; the spoken input language can be detected or selected manually.
 - Choose DeepSeek, OpenAI, Qwen, OpenRouter / Claude, Anthropic / Claude, or a custom OpenAI-compatible endpoint.
 - Save original and Chinese translation text files locally.
-- Save a sentence-level bilingual SRT timeline when Fun-ASR returns timestamps; the timeline can be reviewed in the library or copied for use with a video player.
+- Save a bilingual SRT timeline assembled from Fun-ASR word-level timestamps; the app groups speech by pauses, punctuation, and short-video-friendly duration, then shows time, original text, and Chinese translation in aligned columns.
 - When no speech is detected, optionally generate an explicitly labeled visual sales script after enabling separate cloud frame and visual-copy consent switches.
 
 ## Requirements

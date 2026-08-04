@@ -109,7 +109,7 @@ struct OfflineTranslationCoordinator {
                 rawTranscript,
                 languageID: sourceLanguage.id
             )
-            let timedSegments = transcription.segments.compactMap { segment -> TimedTranscriptSegment? in
+            let rawTimedSegments = transcription.segments.compactMap { segment -> TimedTranscriptSegment? in
                 let organizedText = TranscriptTextProcessor.organizeTranscript(
                     segment.sourceText,
                     languageID: sourceLanguage.id
@@ -122,6 +122,9 @@ struct OfflineTranslationCoordinator {
                     sourceText: organizedText
                 )
             }
+            let timedSegments = transcription.hasWordTimestamps || rawTimedSegments.count > 1
+                ? rawTimedSegments
+                : []
             await reportTranscription(sourceText, AppText.funASRSource)
 
             guard SpeechTranscriptValidator.hasEffectiveSpeechTranscript(

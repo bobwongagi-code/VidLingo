@@ -4,6 +4,7 @@ import VidLingoCore
 struct FunASRTranscription: Sendable {
     let text: String
     let segments: [TimedTranscriptSegment]
+    let hasWordTimestamps: Bool
 }
 
 struct FunASRTranscriber {
@@ -107,14 +108,19 @@ struct FunASRTranscriber {
         let text = transcription.text
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             // 空结果交给统一的无口播画面兜底流程处理。
-            return FunASRTranscription(text: "", segments: [])
+            return FunASRTranscription(text: "", segments: [], hasWordTimestamps: false)
         }
-        return FunASRTranscription(text: text, segments: segments)
+        return FunASRTranscription(
+            text: text,
+            segments: segments,
+            hasWordTimestamps: transcription.hasWordTimestamps
+        )
     }
 
     static func transcription(fromSSELines lines: [String]) throws -> FunASRTranscription {
         var latestText = ""
         var finalSegments = [Int: TimedTranscriptSegment]()
+        var finalWords = [Int: [TimedTranscriptWord]]()
         var nextSegmentID = 1
 
         for line in lines {
@@ -133,6 +139,9 @@ struct FunASRTranscriber {
 
             let textCandidates = [
                 response.output?.text,
+                response.output?.output?.sentence?.text,
+                response.output?.sentence?.text,
+                response.sentence?.text,
                 response.text
             ]
             if let text = textCandidates
@@ -146,10 +155,24 @@ struct FunASRTranscriber {
                     ?? response.sentence,
                   sentence.sentenceEnd == true,
                   let text = sentence.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty,
-                  let beginTime = sentence.beginTime,
-                  let endTime = sentence.endTime,
-                  endTime >= beginTime else { continue }
+                  !text.isEmpty else { continue }
+
+            let sentenceWords = sentence.words?.compactMap { word -> TimedTranscriptWord? in
+                guard let wordText = word.text?.trimmingCharacters(in: .newlines),
+                      !wordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let wordBeginTime = word.beginTime,
+                      let wordEndTime = word.endTime,
+                      wordEndTime >= wordBeginTime else { return nil }
+                return TimedTranscriptWord(
+                    startMilliseconds: wordBeginTime,
+                    endMilliseconds: wordEndTime,
+                    text: wordText,
+                    punctuation: word.punctuation ?? ""
+                )
+            } ?? []
+            let beginTime = sentence.beginTime ?? sentenceWords.first?.startMilliseconds
+            let endTime = sentence.endTime ?? sentenceWords.last?.endMilliseconds
+            guard let beginTime, let endTime, endTime >= beginTime else { continue }
 
             let id = sentence.sentenceID ?? nextSegmentID
             nextSegmentID = max(nextSegmentID, id + 1)
@@ -159,11 +182,29 @@ struct FunASRTranscriber {
                 endMilliseconds: endTime,
                 sourceText: text
             )
+
+            if !sentenceWords.isEmpty {
+                finalWords[id] = sentenceWords
+            }
         }
 
-        let segments = finalSegments.values.sorted { $0.startMilliseconds < $1.startMilliseconds }
-        let text = latestText.isEmpty ? segments.map(\.sourceText).joined(separator: " ") : latestText
-        return FunASRTranscription(text: text, segments: segments)
+        let orderedWords = finalWords
+            .sorted { $0.key < $1.key }
+            .flatMap(\.value)
+        let segments: [TimedTranscriptSegment]
+        let text: String
+        if !orderedWords.isEmpty {
+            segments = TimedTranscriptSegmenter.segment(orderedWords)
+            text = TimedTranscriptSegmenter.renderText(from: orderedWords)
+        } else {
+            segments = finalSegments.values.sorted { $0.startMilliseconds < $1.startMilliseconds }
+            text = latestText.isEmpty ? segments.map(\.sourceText).joined(separator: " ") : latestText
+        }
+        return FunASRTranscription(
+            text: text,
+            segments: segments,
+            hasWordTimestamps: !orderedWords.isEmpty
+        )
     }
 
     static func requestData(
@@ -335,6 +376,7 @@ private struct FunASRSentence: Decodable {
     let sentenceEnd: Bool?
     let beginTime: Int?
     let endTime: Int?
+    let words: [FunASRWord]?
 
     private enum CodingKeys: String, CodingKey {
         case text
@@ -342,6 +384,21 @@ private struct FunASRSentence: Decodable {
         case sentenceEnd = "sentence_end"
         case beginTime = "begin_time"
         case endTime = "end_time"
+        case words
+    }
+}
+
+private struct FunASRWord: Decodable {
+    let text: String?
+    let beginTime: Int?
+    let endTime: Int?
+    let punctuation: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case beginTime = "begin_time"
+        case endTime = "end_time"
+        case punctuation
     }
 }
 

@@ -61,6 +61,7 @@ final class FunASRTranscriberTests: XCTestCase {
         XCTAssertEqual(result.segments[0].endMilliseconds, 3_800)
         XCTAssertEqual(result.segments[1].startMilliseconds, 4_200)
         XCTAssertEqual(result.segments[1].endMilliseconds, 6_950)
+        XCTAssertFalse(result.hasWordTimestamps)
     }
 
     func testIgnoresIntermediateSentenceWithoutFinalTimestamp() throws {
@@ -73,5 +74,22 @@ final class FunASRTranscriberTests: XCTestCase {
 
         XCTAssertEqual(result.text, "完整一句")
         XCTAssertTrue(result.segments.isEmpty)
+    }
+
+    func testParsesWordTimestampsIntoMultipleSegments() throws {
+        let lines = [
+            #"data:{"output":{"text":"第一句 第二句 第三句 第四句","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":9000,"text":"第一句 第二句 第三句 第四句","words":[{"begin_time":0,"end_time":1800,"text":"第一句","punctuation":"。"},{"begin_time":2200,"end_time":3900,"text":"第二句","punctuation":"。"},{"begin_time":4500,"end_time":6200,"text":"第三句","punctuation":""},{"begin_time":7000,"end_time":9000,"text":"第四句","punctuation":"。"}]}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertGreaterThan(result.segments.count, 1)
+        XCTAssertTrue(result.hasWordTimestamps)
+        XCTAssertEqual(result.segments.map(\.sourceText).joined(), "第一句。第二句。第三句。第四句。")
+        XCTAssertEqual(result.segments.first?.startMilliseconds, 0)
+        XCTAssertEqual(result.segments.last?.endMilliseconds, 9_000)
+        XCTAssertTrue(zip(result.segments, result.segments.dropFirst()).allSatisfy {
+            $0.endMilliseconds <= $1.startMilliseconds
+        })
     }
 }
