@@ -12,6 +12,7 @@ struct OfflineTranslationRunRequest: Sendable {
     let customBaseURL: String
     let shouldAutoDetectLanguage: Bool
     let shouldInferProductContext: Bool
+    let allowsCloudAudioTranscription: Bool
     let allowsCloudVideoFrames: Bool
     let allowsVisualSalesCopy: Bool
 }
@@ -19,6 +20,7 @@ struct OfflineTranslationRunRequest: Sendable {
 struct OfflineTranslationRunResult: Sendable {
     let sourceText: String
     let translatedText: String
+    let timedSegments: [TimedTranscriptSegment]
     let sourceLanguage: LanguageOption?
     let sourceDescription: String
     let productContext: String
@@ -64,6 +66,9 @@ struct OfflineTranslationCoordinator {
 
         do {
             try token.check()
+            guard request.allowsCloudAudioTranscription else {
+                throw OfflineVideoTranslationError.cloudAudioConsentRequired
+            }
             let preflightStartedAt = Date()
             let videoDuration = try await Self.preflightVideo(request.videoURL, token: token)
             videoDurationSeconds = Int(videoDuration.rounded())
@@ -77,7 +82,7 @@ struct OfflineTranslationCoordinator {
             recordStage("audioExtraction", startedAt: audioStartedAt)
 
             let transcriptionStartedAt = Date()
-            let rawTranscript = try await transcribe(
+            let transcription = try await transcribe(
                 audioURL: audioURL,
                 videoURL: request.videoURL,
                 productContext: request.initialProductContext,
@@ -88,6 +93,7 @@ struct OfflineTranslationCoordinator {
                 reportProgress: reportProgress
             )
             recordStage("transcription", startedAt: transcriptionStartedAt)
+            let rawTranscript = transcription.text
 
             let languageStartedAt = Date()
             let sourceLanguage = try await detectLanguage(
@@ -103,6 +109,19 @@ struct OfflineTranslationCoordinator {
                 rawTranscript,
                 languageID: sourceLanguage.id
             )
+            let timedSegments = transcription.segments.compactMap { segment -> TimedTranscriptSegment? in
+                let organizedText = TranscriptTextProcessor.organizeTranscript(
+                    segment.sourceText,
+                    languageID: sourceLanguage.id
+                )
+                guard !organizedText.isEmpty else { return nil }
+                return TimedTranscriptSegment(
+                    id: segment.id,
+                    startMilliseconds: segment.startMilliseconds,
+                    endMilliseconds: segment.endMilliseconds,
+                    sourceText: organizedText
+                )
+            }
             await reportTranscription(sourceText, AppText.funASRSource)
 
             guard SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
@@ -133,8 +152,9 @@ struct OfflineTranslationCoordinator {
 
             let translationStartedAt = Date()
             await reportProgress(AppText.offlineVideoTranslating(request.videoURL.lastPathComponent, provider: request.provider.title))
-            let translatedText = try await LLMTranslationService().translateShortVideoTranscript(
+            let translation = try await LLMTranslationService().translateTimedTranscript(
                 sourceText,
+                timedSegments: timedSegments,
                 source: sourceLanguage,
                 target: request.target,
                 productContext: productContext,
@@ -143,11 +163,13 @@ struct OfflineTranslationCoordinator {
                 customBaseURL: request.customBaseURL,
                 token: token
             )
+            let resultSegments = translation.segments.isEmpty ? timedSegments : translation.segments
             recordStage("translation", startedAt: translationStartedAt)
             diagnosticOutcome = "completed"
             return OfflineTranslationRunResult(
                 sourceText: sourceText,
-                translatedText: translatedText,
+                translatedText: translation.text,
+                timedSegments: resultSegments,
                 sourceLanguage: sourceLanguage,
                 sourceDescription: AppText.funASRSource,
                 productContext: productContext,
@@ -201,16 +223,16 @@ struct OfflineTranslationCoordinator {
         languageHint: String?,
         token: ProcessCancellationToken,
         reportProgress: @escaping ProgressHandler
-    ) async throws -> String {
+    ) async throws -> FunASRTranscription {
         try token.check()
         await reportProgress(AppText.offlineVideoTranscribing(videoURL.lastPathComponent))
-        let text = try await FunASRTranscriber.transcribe(
+        let transcription = try await FunASRTranscriber.transcribe(
             audioFileURL: audioURL,
             productContext: productContext,
             token: token,
             languageHint: languageHint
         )
-        return text
+        return transcription
     }
 
     private func generateNoSpeechResult(
@@ -228,6 +250,7 @@ struct OfflineTranslationCoordinator {
             return OfflineTranslationRunResult(
                 sourceText: sourceText,
                 translatedText: AppText.noEffectiveSpeechDescription,
+                timedSegments: [],
                 sourceLanguage: nil,
                 sourceDescription: AppText.funASRSource,
                 productContext: request.initialProductContext,
@@ -245,6 +268,7 @@ struct OfflineTranslationCoordinator {
             return OfflineTranslationRunResult(
                 sourceText: sourceText,
                 translatedText: AppText.noEffectiveSpeechDescription,
+                timedSegments: [],
                 sourceLanguage: nil,
                 sourceDescription: AppText.funASRSource,
                 productContext: request.initialProductContext,
@@ -266,6 +290,7 @@ struct OfflineTranslationCoordinator {
             return OfflineTranslationRunResult(
                 sourceText: sourceText,
                 translatedText: "\(AppText.visualSalesCopyNotice)\n\n\(visualCopy)",
+                timedSegments: [],
                 sourceLanguage: nil,
                 sourceDescription: AppText.funASRSource,
                 productContext: request.initialProductContext,
@@ -276,6 +301,7 @@ struct OfflineTranslationCoordinator {
             return OfflineTranslationRunResult(
                 sourceText: sourceText,
                 translatedText: AppText.noEffectiveSpeechDescription,
+                timedSegments: [],
                 sourceLanguage: nil,
                 sourceDescription: AppText.funASRSource,
                 productContext: request.initialProductContext,

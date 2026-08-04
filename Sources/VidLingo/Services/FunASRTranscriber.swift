@@ -1,4 +1,10 @@
 import Foundation
+import VidLingoCore
+
+struct FunASRTranscription: Sendable {
+    let text: String
+    let segments: [TimedTranscriptSegment]
+}
 
 struct FunASRTranscriber {
     static let modelName = "fun-asr-flash-2026-06-15"
@@ -18,7 +24,7 @@ struct FunASRTranscriber {
         productContext: String,
         token: ProcessCancellationToken,
         languageHint: String? = nil
-    ) async throws -> String {
+    ) async throws -> FunASRTranscription {
         try token.check()
         guard let apiKey = try TranslationAPIKeyStore.readAPIKey(for: .qwen), !apiKey.isEmpty else {
             throw FunASRTranscriptionError.missingAPIKey
@@ -43,38 +49,121 @@ struct FunASRTranscriber {
         request.timeoutInterval = 240
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("disable", forHTTPHeaderField: "X-DashScope-SSE")
+        request.setValue("enable", forHTTPHeaderField: "X-DashScope-SSE")
         request.httpBody = try requestData(
             audioData: audioData,
             productContext: productContext,
             languageHint: languageHint
         )
 
-        let data: Data
+        let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (bytes, response) = try await session.bytes(for: request)
         } catch let error as URLError where error.code == .timedOut {
             throw FunASRTranscriptionError.requestTimedOut
         }
-        try token.check()
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw FunASRTranscriptionError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
             throw FunASRTranscriptionError.requestFailed(
                 statusCode: httpResponse.statusCode,
-                message: errorMessage(from: data)
+                message: errorMessage(from: errorData)
             )
         }
 
+        var streamLines = [String]()
         do {
-            return try recognizedText(from: data)
-        } catch FunASRTranscriptionError.emptyOutput {
-            // 空结果交给统一的无口播画面兜底流程处理。
-            return ""
+            for try await line in bytes.lines {
+                try token.check()
+                streamLines.append(line)
+            }
+        } catch ProcessSupervisorError.cancelled {
+            throw ProcessSupervisorError.cancelled
+        } catch ProcessSupervisorError.deadlineExceeded {
+            throw ProcessSupervisorError.deadlineExceeded
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .timedOut {
+            throw FunASRTranscriptionError.requestTimedOut
+        } catch {
+            throw FunASRTranscriptionError.invalidResponse
         }
+
+        try token.check()
+        let transcription: FunASRTranscription
+        do {
+            transcription = try Self.transcription(fromSSELines: streamLines)
+        } catch {
+            throw FunASRTranscriptionError.invalidResponse
+        }
+        let segments = transcription.segments
+        let text = transcription.text
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // 空结果交给统一的无口播画面兜底流程处理。
+            return FunASRTranscription(text: "", segments: [])
+        }
+        return FunASRTranscription(text: text, segments: segments)
+    }
+
+    static func transcription(fromSSELines lines: [String]) throws -> FunASRTranscription {
+        var latestText = ""
+        var finalSegments = [Int: TimedTranscriptSegment]()
+        var nextSegmentID = 1
+
+        for line in lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst("data:".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !payload.isEmpty, payload != "[DONE]",
+                  let data = payload.data(using: .utf8) else { continue }
+
+            let response: FunASRResponse
+            do {
+                response = try JSONDecoder().decode(FunASRResponse.self, from: data)
+            } catch {
+                throw FunASRTranscriptionError.invalidResponse
+            }
+
+            let textCandidates = [
+                response.output?.text,
+                response.text
+            ]
+            if let text = textCandidates
+                .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .first(where: { !$0.isEmpty }) {
+                latestText = text
+            }
+
+            guard let sentence = response.output?.sentence
+                    ?? response.output?.output?.sentence
+                    ?? response.sentence,
+                  sentence.sentenceEnd == true,
+                  let text = sentence.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty,
+                  let beginTime = sentence.beginTime,
+                  let endTime = sentence.endTime,
+                  endTime >= beginTime else { continue }
+
+            let id = sentence.sentenceID ?? nextSegmentID
+            nextSegmentID = max(nextSegmentID, id + 1)
+            finalSegments[id] = TimedTranscriptSegment(
+                id: id,
+                startMilliseconds: beginTime,
+                endMilliseconds: endTime,
+                sourceText: text
+            )
+        }
+
+        let segments = finalSegments.values.sorted { $0.startMilliseconds < $1.startMilliseconds }
+        let text = latestText.isEmpty ? segments.map(\.sourceText).joined(separator: " ") : latestText
+        return FunASRTranscription(text: text, segments: segments)
     }
 
     static func requestData(
@@ -242,6 +331,18 @@ private struct FunASRNestedOutput: Decodable {
 
 private struct FunASRSentence: Decodable {
     let text: String?
+    let sentenceID: Int?
+    let sentenceEnd: Bool?
+    let beginTime: Int?
+    let endTime: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case sentenceID = "sentence_id"
+        case sentenceEnd = "sentence_end"
+        case beginTime = "begin_time"
+        case endTime = "end_time"
+    }
 }
 
 private struct FunASRErrorResponse: Decodable {

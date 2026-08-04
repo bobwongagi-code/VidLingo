@@ -3,9 +3,12 @@ import AVFoundation
 import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
+import VidLingoCore
 
 struct CaptionBoardView: View {
     @Bindable var session: TranslationSessionStore
+    @State private var previewPlayer: AVPlayer?
+    @State private var isPreviewVisible = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -13,12 +16,31 @@ struct CaptionBoardView: View {
                 session: session,
                 importVideo: openOfflineVideoPanel,
                 startTranslation: session.startOfflineVideoTranslation,
-                cancelTranslation: session.cancelOfflineVideoTranslation
+                cancelTranslation: session.cancelOfflineVideoTranslation,
+                previewPlayer: $previewPlayer,
+                isPreviewVisible: $isPreviewVisible
             )
 
-            TranscriptResultView(session: session)
+            TranscriptResultView(session: session, seekPreview: seekPreview)
         }
         .padding(24)
+    }
+
+    private func seekPreview(to milliseconds: Int) {
+        guard let videoURL = session.offlineVideoURL else { return }
+        if let asset = previewPlayer?.currentItem?.asset as? AVURLAsset,
+           asset.url != videoURL {
+            previewPlayer = AVPlayer(url: videoURL)
+        } else if previewPlayer == nil {
+            previewPlayer = AVPlayer(url: videoURL)
+        }
+        isPreviewVisible = true
+        previewPlayer?.pause()
+        previewPlayer?.seek(
+            to: CMTime(value: Int64(max(0, milliseconds)), timescale: 1_000),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
     }
 
     private func openOfflineVideoPanel() {
@@ -39,6 +61,8 @@ private struct OfflineVideoImportPanel: View {
     let importVideo: () -> Void
     let startTranslation: () -> Void
     let cancelTranslation: () -> Void
+    @Binding var previewPlayer: AVPlayer?
+    @Binding var isPreviewVisible: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -127,7 +151,9 @@ private struct OfflineVideoImportPanel: View {
                     durationText: session.offlineVideoDurationText,
                     isProcessing: session.isOfflineVideoProcessing,
                     canStartTranslation: session.canStartOfflineVideoTranslation,
-                    startTranslation: startTranslation
+                    startTranslation: startTranslation,
+                    player: $previewPlayer,
+                    isPreviewVisible: $isPreviewVisible
                 )
             }
         }
@@ -144,9 +170,9 @@ private struct OfflineVideoPreviewCard: View {
     let isProcessing: Bool
     let canStartTranslation: Bool
     let startTranslation: () -> Void
+    @Binding var player: AVPlayer?
+    @Binding var isPreviewVisible: Bool
     @State private var thumbnail: NSImage?
-    @State private var isPreviewVisible = false
-    @State private var player: AVPlayer?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -310,18 +336,27 @@ private struct ProcessingStatusPill: View {
 
 private struct TranscriptResultView: View {
     @Bindable var session: TranslationSessionStore
+    let seekPreview: (Int) -> Void
 
     var body: some View {
         if let line = session.lines.last {
-            HStack(alignment: .top, spacing: 16) {
-                TranscriptPane(
-                    title: AppText.original,
-                    description: session.transcriptionSourceDescription,
-                    text: line.sourceText
+            if !session.timedSegments.isEmpty {
+                TimelineTranscriptPane(
+                    segments: session.timedSegments,
+                    fallbackTranslation: line.translatedText,
+                    seekPreview: seekPreview
                 )
-                TranscriptPane(title: AppText.translation, description: AppText.translationDescription, text: line.translatedText)
+            } else {
+                HStack(alignment: .top, spacing: 16) {
+                    TranscriptPane(
+                        title: AppText.original,
+                        description: session.transcriptionSourceDescription,
+                        text: line.sourceText
+                    )
+                    TranscriptPane(title: AppText.translation, description: AppText.translationDescription, text: line.translatedText)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(
                 AppText.noCaptionsYet,

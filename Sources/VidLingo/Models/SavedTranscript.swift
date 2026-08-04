@@ -18,10 +18,12 @@ struct SavedTranscript: Identifiable, Equatable {
     var translationFileName: String?
     var sourceFileURL: URL
     var translationFileURL: URL?
+    var timedSegments: [TimedTranscriptSegment]
     var updatedAt: Date
 
     var isLegacy: Bool { origin == .legacyAirTranslate }
     var isVisualGeneratedCopy: Bool { artifactKind == .visualGeneratedCopy }
+    var hasTimeline: Bool { !timedSegments.isEmpty }
 
     var isOriginalAndTranslation: Bool {
         translatedText != nil && translationFileName != nil
@@ -33,7 +35,8 @@ struct SavedTranscript: Identifiable, Equatable {
         updatedAt: Date,
         origin: TranscriptOrigin = .current,
         artifactKind: TranscriptArtifactKind = .transcriptionTranslation,
-        manifest: TranscriptArtifactManifest? = nil
+        manifest: TranscriptArtifactManifest? = nil,
+        timedSegments: [TimedTranscriptSegment] = []
     ) {
         let fileName = fileURL.lastPathComponent
         self.id = "\(origin.rawValue):\(fileURL.standardizedFileURL.path)"
@@ -47,6 +50,7 @@ struct SavedTranscript: Identifiable, Equatable {
         self.translationFileName = nil
         self.sourceFileURL = fileURL
         self.translationFileURL = nil
+        self.timedSegments = timedSegments
         self.updatedAt = updatedAt
     }
 
@@ -59,7 +63,8 @@ struct SavedTranscript: Identifiable, Equatable {
         updatedAt: Date,
         origin: TranscriptOrigin = .current,
         artifactKind: TranscriptArtifactKind = .transcriptionTranslation,
-        manifest: TranscriptArtifactManifest? = nil
+        manifest: TranscriptArtifactManifest? = nil,
+        timedSegments: [TimedTranscriptSegment] = []
     ) {
         self.id = id
         self.origin = origin
@@ -72,6 +77,7 @@ struct SavedTranscript: Identifiable, Equatable {
         self.translationFileName = translationFileURL.lastPathComponent
         self.sourceFileURL = sourceFileURL
         self.translationFileURL = translationFileURL
+        self.timedSegments = timedSegments
         self.updatedAt = updatedAt
     }
 

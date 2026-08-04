@@ -1,6 +1,11 @@
 import Foundation
 import VidLingoCore
 
+struct TimedTranscriptTranslation: Sendable {
+    let text: String
+    let segments: [TimedTranscriptSegment]
+}
+
 actor LLMTranslationService {
     private enum RequestTimeout {
         static let productContext: TimeInterval = 90
@@ -160,6 +165,199 @@ actor LLMTranslationService {
         return output
     }
 
+    func translateTimedTranscript(
+        _ text: String,
+        timedSegments: [TimedTranscriptSegment],
+        source: LanguageOption,
+        target: LanguageOption,
+        productContext: String,
+        provider: TranslationProviderID,
+        modelName: String,
+        customBaseURL: String,
+        token: ProcessCancellationToken
+    ) async throws -> TimedTranscriptTranslation {
+        guard !text.isEmpty, !timedSegments.isEmpty,
+              Self.supportsTimedTranslation(provider: provider, modelName: modelName),
+              timedSegments.count <= 80,
+              timedSegments.reduce(0, { $0 + $1.sourceText.count }) <= 12_000 else {
+            return try await fallbackTimedTranslation(
+                text,
+                source: source,
+                target: target,
+                productContext: productContext,
+                provider: provider,
+                modelName: modelName,
+                customBaseURL: customBaseURL,
+                token: token
+            )
+        }
+        try token.check()
+
+        if provider == .qwen, modelName.lowercased().hasPrefix("qwen-mt-") {
+            return try await translateTimedTranscriptWithQwenMT(
+                text,
+                timedSegments: timedSegments,
+                source: source,
+                target: target,
+                productContext: productContext,
+                modelName: modelName,
+                customBaseURL: customBaseURL,
+                token: token
+            )
+        }
+
+        let (request, model) = try preparedRequest(
+            provider: provider,
+            modelName: modelName,
+            customBaseURL: customBaseURL,
+            timeout: RequestTimeout.transcriptTranslation
+        )
+        let configuration = timedTranslationRequestConfiguration(
+            timedSegments,
+            source: source,
+            target: target,
+            productContext: productContext
+        )
+        let output = try await adapter(for: provider).sendText(
+            request: request,
+            model: model,
+            system: configuration.system,
+            userText: configuration.userText,
+            options: LLMGenerationOptions(
+                temperature: 0.2,
+                maxTokens: 2_500,
+                enableThinking: nonThinkingTranslationMode(provider: provider, modelName: modelName)
+            ),
+            provider: provider
+        )
+        try token.check()
+
+        do {
+            let translations = try Self.parseTimedTranslations(from: output)
+            guard Set(translations.map(\.id)).count == translations.count else {
+                throw TimedTranslationParsingError.invalidOutput
+            }
+            let translationsByID = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.translation) })
+            guard translationsByID.count == timedSegments.count,
+                  Set(translationsByID.keys) == Set(timedSegments.map(\.id)) else {
+                throw TimedTranslationParsingError.invalidOutput
+            }
+            let segments = timedSegments.map { segment in
+                var translatedSegment = segment
+                translatedSegment.translatedText = translationsByID[segment.id]
+                return translatedSegment
+            }
+            guard segments.allSatisfy(\.hasTranslation) else {
+                throw TimedTranslationParsingError.invalidOutput
+            }
+            return TimedTranscriptTranslation(
+                text: segments.compactMap(\.translatedText).joined(separator: "\n"),
+                segments: segments
+            )
+        } catch TimedTranslationParsingError.invalidOutput {
+            return try await fallbackTimedTranslation(
+                text,
+                source: source,
+                target: target,
+                productContext: productContext,
+                provider: provider,
+                modelName: modelName,
+                customBaseURL: customBaseURL,
+                token: token
+            )
+        }
+    }
+
+    static func supportsTimedTranslation(provider: TranslationProviderID, modelName: String) -> Bool {
+        _ = provider
+        return !modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func fallbackTimedTranslation(
+        _ text: String,
+        source: LanguageOption,
+        target: LanguageOption,
+        productContext: String,
+        provider: TranslationProviderID,
+        modelName: String,
+        customBaseURL: String,
+        token: ProcessCancellationToken
+    ) async throws -> TimedTranscriptTranslation {
+        let translatedText = try await translateShortVideoTranscript(
+            text,
+            source: source,
+            target: target,
+            productContext: productContext,
+            provider: provider,
+            modelName: modelName,
+            customBaseURL: customBaseURL,
+            token: token
+        )
+        return TimedTranscriptTranslation(text: translatedText, segments: [])
+    }
+
+    private func translateTimedTranscriptWithQwenMT(
+        _ text: String,
+        timedSegments: [TimedTranscriptSegment],
+        source: LanguageOption,
+        target: LanguageOption,
+        productContext: String,
+        modelName: String,
+        customBaseURL: String,
+        token: ProcessCancellationToken
+    ) async throws -> TimedTranscriptTranslation {
+        let (request, model) = try preparedRequest(
+            provider: .qwen,
+            modelName: modelName,
+            customBaseURL: customBaseURL,
+            timeout: RequestTimeout.transcriptTranslation
+        )
+        let configuration = translationRequestConfiguration(
+            text,
+            source: source,
+            target: target,
+            productContext: productContext,
+            provider: .qwen,
+            modelName: model
+        )
+        let output = try await adapter(for: .qwen).sendText(
+            request: request,
+            model: model,
+            system: "",
+            userText: Self.qwenMTTimedInput(timedSegments),
+            options: configuration.options,
+            provider: .qwen
+        )
+        try token.check()
+
+        guard let translations = Self.parseQwenMTTimedTranslations(
+            from: output,
+            expectedIDs: timedSegments.map(\.id)
+        ) else {
+            return try await fallbackTimedTranslation(
+                text,
+                source: source,
+                target: target,
+                productContext: productContext,
+                provider: .qwen,
+                modelName: model,
+                customBaseURL: customBaseURL,
+                token: token
+            )
+        }
+
+        let translationsByID = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.translation) })
+        let segments = timedSegments.map { segment in
+            var translatedSegment = segment
+            translatedSegment.translatedText = translationsByID[segment.id]
+            return translatedSegment
+        }
+        return TimedTranscriptTranslation(
+            text: segments.compactMap(\.translatedText).joined(separator: "\n"),
+            segments: segments
+        )
+    }
+
     func generateVisualSalesCopy(
         fileName: String,
         durationText: String,
@@ -290,6 +488,115 @@ actor LLMTranslationService {
         )
     }
 
+    private func timedTranslationRequestConfiguration(
+        _ segments: [TimedTranscriptSegment],
+        source: LanguageOption,
+        target: LanguageOption,
+        productContext: String
+    ) -> (system: String, userText: String) {
+        let context = productContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        let guardrails = translationGuardrails(for: source)
+        let segmentPayload = segments.map { ["id": $0.id, "text": $0.sourceText] as [String: Any] }
+        let payloadData = try? JSONSerialization.data(withJSONObject: segmentPayload, options: [.sortedKeys])
+        let payload = payloadData.flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        return (
+            system: """
+            \(timedTranslationSystemPrompt)
+
+            你还需要保持口播片段的时间轴对应关系。对每个输入片段单独翻译，但要结合全部片段上下文纠正 ASR 错词。
+            只返回 JSON，不要 Markdown 代码块、解释、标题或额外字段，格式必须是：
+            {"segments":[{"id":1,"translation":"中文译文"}]}
+            必须返回全部输入 id，不能合并、遗漏或新增 id。译文中不要输出时间戳、原文标签或括号说明。
+            \(guardrails)
+            """,
+            userText: """
+            源语言：\(source.localizedTitle)
+            目标语言：\(target.localizedTitle)
+            视频类型：TikTok / 短视频带货口播
+            商品类型：\(context.isEmpty ? "未知商品" : context)
+
+            口播片段 JSON：
+            \(payload)
+            """
+        )
+    }
+
+    static func parseTimedTranslations(from text: String) throws -> [TimedTranslationItem] {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jsonText = Self.extractJSONObject(from: trimmedText) ?? trimmedText
+        guard let data = jsonText.data(using: .utf8),
+              let response = try? JSONDecoder().decode(TimedTranslationResponse.self, from: data) else {
+            throw TimedTranslationParsingError.invalidOutput
+        }
+        let items = response.segments.map { item in
+            TimedTranslationItem(
+                id: item.id,
+                translation: item.translation.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        guard !items.isEmpty, items.allSatisfy({ !$0.translation.isEmpty }) else {
+            throw TimedTranslationParsingError.invalidOutput
+        }
+        return items
+    }
+
+    static func qwenMTTimedInput(_ segments: [TimedTranscriptSegment]) -> String {
+        segments.map { segment in
+            "<<<VIDLINGO_SEGMENT_(segment.id)>>>\n\(segment.sourceText)"
+        }.joined(separator: "\n\n")
+    }
+
+    static func parseQwenMTTimedTranslations(
+        from text: String,
+        expectedIDs: [Int]
+    ) -> [TimedTranslationItem]? {
+        let markerPrefix = "<<<VIDLINGO_SEGMENT_"
+        var translations = [TimedTranslationItem]()
+        var currentID: Int?
+        var currentLines = [String]()
+
+        for line in text.components(separatedBy: .newlines) {
+            guard let markerStart = line.range(of: markerPrefix),
+                  markerStart.lowerBound == line.startIndex,
+                  let markerEnd = line.range(of: ">>>", range: markerStart.upperBound..<line.endIndex) else {
+                if currentID != nil {
+                    currentLines.append(line)
+                }
+                continue
+            }
+
+            if let currentID {
+                let translation = currentLines.joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                translations.append(TimedTranslationItem(id: currentID, translation: translation))
+            }
+
+            let idText = String(line[markerStart.upperBound..<markerEnd.lowerBound])
+            guard let id = Int(idText) else { return nil }
+            currentID = id
+            let remainder = String(line[markerEnd.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            currentLines = remainder.isEmpty ? [] : [remainder]
+        }
+
+        if let currentID {
+            let translation = currentLines.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            translations.append(TimedTranslationItem(id: currentID, translation: translation))
+        }
+
+        let expectedSet = Set(expectedIDs)
+        let actualIDs = translations.map(\.id)
+        guard !expectedIDs.isEmpty,
+              actualIDs.count == expectedIDs.count,
+              Set(actualIDs).count == actualIDs.count,
+              Set(actualIDs) == expectedSet,
+              translations.allSatisfy({ !$0.translation.isEmpty }) else {
+            return nil
+        }
+        return translations
+    }
+
     private func nonThinkingTranslationMode(
         provider: TranslationProviderID,
         modelName: String
@@ -414,7 +721,7 @@ actor LLMTranslationService {
 
     private func parseVisualVideoAnalysis(from text: String) throws -> VisualVideoAnalysis {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let jsonText = extractJSONObject(from: trimmedText) ?? trimmedText
+        let jsonText = Self.extractJSONObject(from: trimmedText) ?? trimmedText
         guard let data = jsonText.data(using: .utf8) else {
             throw LLMTranslationError.visualResponseInvalid
         }
@@ -425,7 +732,7 @@ actor LLMTranslationService {
         }
     }
 
-    private func extractJSONObject(from text: String) -> String? {
+    private static func extractJSONObject(from text: String) -> String? {
         guard let start = text.firstIndex(of: "{") else { return nil }
         var depth = 0
         var isInsideString = false
@@ -573,6 +880,35 @@ actor LLMTranslationService {
         return fallbackSystemPrompt
     }
 
+    private var timedTranslationSystemPrompt: String {
+        Self.structuredTranslationSystemPrompt(from: systemPrompt)
+    }
+
+    static func structuredTranslationSystemPrompt(from prompt: String) -> String {
+        let outputHeading = "# 五、输出格式"
+        let reminderHeading = "# 六、特别提醒"
+        guard let outputRange = prompt.range(of: outputHeading),
+              let reminderRange = prompt.range(
+                of: reminderHeading,
+                range: outputRange.upperBound..<prompt.endIndex
+              ) else {
+            return """
+            你是一个跨境电商短视频字幕翻译助手。
+            保留原文事实、数字、品牌和产品信息；只在不改变原意的前提下进行口语化本土表达。
+            不要编造原文没有的功效、参数、价格、折扣、库存或时间限定词。
+            不要输出解释、标题、编号、Markdown、括号注释或非口播内容。
+            """
+        }
+
+        let policy = prompt[..<outputRange.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let reminders = prompt[reminderRange.lowerBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return [policy, reminders]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
     private var fallbackSystemPrompt: String {
         """
         你是一个跨境电商短视频字幕翻译助手。
@@ -600,4 +936,17 @@ private struct VisualVideoAnalysis: Decodable {
     let scene: String
     let action: String
     let mood: String
+}
+
+private struct TimedTranslationResponse: Decodable {
+    let segments: [TimedTranslationItem]
+}
+
+struct TimedTranslationItem: Decodable, Equatable, Sendable {
+    let id: Int
+    let translation: String
+}
+
+private enum TimedTranslationParsingError: Error {
+    case invalidOutput
 }

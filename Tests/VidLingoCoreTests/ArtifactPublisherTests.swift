@@ -55,6 +55,23 @@ final class ArtifactPublisherTests: XCTestCase {
         }
     }
 
+    func testPublishWritesOptionalBilingualTimeline() throws {
+        let manifest = makeManifest(id: "artifact-timeline", timelineFileName: "bilingual.srt")
+        let timeline = "1\n00:00:00,000 --> 00:00:01,000\n原文\n译文\n"
+
+        let artifact = try ArtifactPublisher.publish(
+            sourceText: "原文",
+            translatedText: "译文",
+            manifest: manifest,
+            in: directoryURL,
+            timelineText: timeline
+        )
+
+        let timelineURL = try XCTUnwrap(artifact.timelineFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: timelineURL.path))
+        XCTAssertEqual(try String(contentsOf: timelineURL, encoding: .utf8), timeline)
+    }
+
     func testStaleStagingDirectoriesAreRemoved() throws {
         let stagingURL = directoryURL.appendingPathComponent(".staging-old", isDirectory: true)
         try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true)
@@ -68,7 +85,7 @@ final class ArtifactPublisherTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: stagingURL.path))
     }
 
-    private func makeManifest(id: String) -> TranscriptArtifactManifest {
+    private func makeManifest(id: String, timelineFileName: String? = nil) -> TranscriptArtifactManifest {
         TranscriptArtifactManifest(
             id: id,
             createdAt: Date(timeIntervalSince1970: 0),
@@ -77,7 +94,8 @@ final class ArtifactPublisherTests: XCTestCase {
             targetLanguageID: "zh-CN",
             providerID: "qwen",
             modelName: "qwen3.6-plus",
-            videoFileName: "sample.mp4"
+            videoFileName: "sample.mp4",
+            timelineFileName: timelineFileName
         )
     }
 }

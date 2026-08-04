@@ -15,6 +15,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Always translate to Simplified Chinese; the spoken input language can be detected or selected manually.
 - Choose DeepSeek, OpenAI, Qwen, OpenRouter / Claude, Anthropic / Claude, or a custom OpenAI-compatible endpoint.
 - Save original and Chinese translation text files locally.
+- Save a sentence-level bilingual SRT timeline when Fun-ASR returns timestamps; the timeline can be reviewed in the library or copied for use with a video player.
 - When no speech is detected, optionally generate an explicitly labeled visual sales script after enabling separate cloud frame and visual-copy consent switches.
 
 ## Requirements
@@ -23,8 +24,8 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Swift 6 toolchain.
 - `ffmpeg` available on `PATH`.
 - A Qwen / 千问 API key for Fun-ASR and an API key for the selected translation provider. When Qwen is selected for translation, the same key is used for both.
-- The extracted speech audio is uploaded to Fun-ASR for transcription; frame uploads and no-speech visual copy remain separate opt-in switches.
-- Cloud frame uploads and no-speech visual copy are separate opt-in switches and default to off.
+- The extracted speech audio is uploaded to Fun-ASR only after the separate audio-consent switch is enabled; frame uploads and no-speech visual copy remain separate opt-in switches.
+- Audio consent, cloud frame uploads, and no-speech visual copy are independent switches and default to off.
 - Custom endpoints must use HTTPS by default. Loopback HTTP is accepted only with `VIDLINGO_ALLOW_LOCAL_HTTP=1`.
 
 ## Translation Providers
@@ -75,6 +76,8 @@ New saved transcripts are written as manifest-backed directories to:
 ```text
 ~/Library/Application Support/VidLingo/Transcripts/
 ```
+
+Each completed translation is published as one directory containing `manifest.json`, `original.txt`, `translation.txt`, and, when timestamps are available, `bilingual.srt`. Incomplete staging directories are ignored and cleaned up on a later startup.
 
 VidLingo reads old saved transcript files as read-only records. Use the explicit import action to copy them into VidLingo storage; delete-all only deletes VidLingo-owned records:
 

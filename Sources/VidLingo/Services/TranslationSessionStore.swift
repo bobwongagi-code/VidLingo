@@ -7,6 +7,7 @@ import VidLingoCore
 private enum SettingsKey {
     static let sourceLanguageID = "sourceLanguageID"
     static let isSourceAutoDetectionEnabled = "isSourceAutoDetectionEnabled"
+    static let allowsCloudAudioTranscription = "allowsCloudAudioTranscription"
     static let allowsCloudVideoFrames = "allowsCloudVideoFrames"
     static let allowsVisualSalesCopy = "allowsVisualSalesCopy"
     static let translationProviderID = "translationProviderID"
@@ -47,6 +48,9 @@ final class TranslationSessionStore {
     var hasTranslationAPIKey: Bool { translationAPIKeyAvailability == .configured }
     var funASRAPIKeyAvailability = TranslationAPIKeyStore.availability(for: .qwen)
     var hasFunASRAPIKey: Bool { funASRAPIKeyAvailability == .configured }
+    var allowsCloudAudioTranscription = false {
+        didSet { persistSelectedSettings() }
+    }
     var allowsCloudVideoFrames = false {
         didSet { persistSelectedSettings() }
     }
@@ -56,6 +60,7 @@ final class TranslationSessionStore {
     var statusMessage = AppText.ready
     var transcriptionSourceDescription = AppText.originalDescription
     var lines: [CaptionLine] = []
+    var timedSegments: [TimedTranscriptSegment] = []
     var offlineVideoProductContext = ""
     var offlineVideoURL: URL?
     var offlineVideoFileName = ""
@@ -68,7 +73,12 @@ final class TranslationSessionStore {
     var savedDraftTranslationText = ""
 
     var offlineVideoExecutionPlan: String {
-        var steps = ["本地提取音频", "上传音频到 Fun-ASR 完整转写"]
+        var steps = ["本地提取音频"]
+        if allowsCloudAudioTranscription {
+            steps.append("上传口播音频到 Fun-ASR \(FunASRTranscriber.modelName) 完整转写并保留句级时间轴（1 次云端调用，可能产生费用）")
+        } else {
+            steps.append("等待允许上传音频到 Fun-ASR")
+        }
         if isSourceAutoDetectionEnabled {
             steps.append("根据转写文本自动识别口播语言")
         }
@@ -77,18 +87,21 @@ final class TranslationSessionStore {
             modelName: translationModelName
         )
         if allowsCloudVideoFrames && supportsVision {
-            steps.append("可能上传抽取的视频截图到 \(translationProvider.title) \(translationModelName)")
+            steps.append("上传视频截图到 \(translationProvider.title) \(translationModelName) 做商品识别（1 次视觉调用，可能产生费用）")
         }
         if allowsVisualSalesCopy && allowsCloudVideoFrames && supportsVision {
-            steps.append("无口播时，可能调用视觉模型生成文案")
+            steps.append("无口播时，再用同一组截图调用视觉模型分析并生成文案（2 次视觉调用，可能产生费用）")
         }
-        steps.append("调用 \(translationProvider.title) \(translationModelName) 翻译为简体中文")
+        steps.append("调用 \(translationProvider.title) \(translationModelName) 翻译为简体中文（1 次云端调用，可能产生费用）")
         return steps.joined(separator: "；")
     }
 
     var offlineTranslationConfigurationWarning: String? {
         guard funASRAPIKeyAvailability == .configured else {
             return AppText.funASRKeyConfigurationWarning(funASRAPIKeyAvailability)
+        }
+        guard allowsCloudAudioTranscription else {
+            return AppText.cloudAudioConsentRequired
         }
         guard translationAPIKeyAvailability == .configured else {
             return AppText.keychainAvailabilityText(translationAPIKeyAvailability)
@@ -121,6 +134,7 @@ final class TranslationSessionStore {
 
     func selectOfflineVideo(_ videoURL: URL) {
         lines.removeAll()
+        timedSegments.removeAll()
         transcriptionSourceDescription = AppText.originalDescription
         offlineVideoProductContext = ""
         offlineVideoURL = videoURL
@@ -166,6 +180,7 @@ final class TranslationSessionStore {
             customBaseURL: customTranslationBaseURL,
             shouldAutoDetectLanguage: isSourceAutoDetectionEnabled,
             shouldInferProductContext: isProductContextInferenceEnabled,
+            allowsCloudAudioTranscription: allowsCloudAudioTranscription,
             allowsCloudVideoFrames: allowsCloudVideoFrames,
             allowsVisualSalesCopy: allowsVisualSalesCopy
         )
@@ -177,6 +192,7 @@ final class TranslationSessionStore {
         offlineVideoFileName = videoURL.lastPathComponent
         isOfflineVideoProcessing = true
         lines.removeAll()
+        timedSegments.removeAll()
         transcriptionSourceDescription = AppText.originalDescription
         statusMessage = AppText.offlineVideoExtractingAudio(videoURL.lastPathComponent)
 
@@ -201,6 +217,7 @@ final class TranslationSessionStore {
                         customBaseURL: params.customBaseURL,
                         shouldAutoDetectLanguage: params.shouldAutoDetectLanguage,
                         shouldInferProductContext: params.shouldInferProductContext,
+                        allowsCloudAudioTranscription: params.allowsCloudAudioTranscription,
                         allowsCloudVideoFrames: params.allowsCloudVideoFrames,
                         allowsVisualSalesCopy: params.allowsVisualSalesCopy
                     ),
@@ -213,6 +230,7 @@ final class TranslationSessionStore {
                     reportTranscription: { sourceText, sourceDescription in
                         await MainActor.run {
                             self.transcriptionSourceDescription = sourceDescription
+                            self.timedSegments = []
                             self.lines = [CaptionLine.partialTranscript(sourceText: sourceText)]
                         }
                     }
@@ -229,6 +247,7 @@ final class TranslationSessionStore {
                     isFinal: true,
                     revision: 2
                 )]
+                timedSegments = result.timedSegments
                 try token.check()
                 if let kind = result.artifactKind {
                     try saveOfflineVideoTranscript(
@@ -238,7 +257,8 @@ final class TranslationSessionStore {
                         params: params,
                         kind: kind,
                         frameData: result.frameData,
-                        videoFileName: videoURL.lastPathComponent
+                        videoFileName: videoURL.lastPathComponent,
+                        timedSegments: result.timedSegments
                     )
                 }
                 statusMessage = AppText.offlineVideoComplete(videoURL.lastPathComponent)
@@ -266,6 +286,7 @@ final class TranslationSessionStore {
         let customBaseURL: String
         let shouldAutoDetectLanguage: Bool
         let shouldInferProductContext: Bool
+        let allowsCloudAudioTranscription: Bool
         let allowsCloudVideoFrames: Bool
         let allowsVisualSalesCopy: Bool
     }
@@ -421,14 +442,14 @@ final class TranslationSessionStore {
     }
 
     func deleteAllSavedTranscripts() {
-        let failures = transcriptRepository.deleteAllCurrent(savedTranscripts)
+        let result = transcriptRepository.deleteAllCurrent(savedTranscripts)
         selectedSavedTranscriptID = nil
         savedDraftSourceText = ""
         savedDraftTranslationText = ""
         guard loadSavedTranscripts() else { return }
-        statusMessage = failures == 0
+        statusMessage = result.failedIDs.isEmpty
             ? AppText.deletedCurrentTranscripts
-            : AppText.deleteSomeTranscriptsFailed(failures)
+            : AppText.deleteSomeTranscriptsFailed(result.failedIDs.count)
     }
 
     func importLegacyTranscripts() {
@@ -452,7 +473,8 @@ final class TranslationSessionStore {
         params: TranslationParams,
         kind: TranscriptArtifactKind,
         frameData: [Data] = [],
-        videoFileName: String
+        videoFileName: String,
+        timedSegments: [TimedTranscriptSegment] = []
     ) throws -> PublishedTranscriptArtifact {
         let artifact = try transcriptRepository.publish(
             sourceText: sourceText,
@@ -463,7 +485,8 @@ final class TranslationSessionStore {
             modelName: params.modelName,
             videoFileName: videoFileName,
             kind: kind,
-            frameData: frameData
+            frameData: frameData,
+            timedSegments: timedSegments
         )
         try reloadSavedTranscripts()
         return artifact
@@ -491,6 +514,7 @@ final class TranslationSessionStore {
         if defaults.object(forKey: SettingsKey.isSourceAutoDetectionEnabled) != nil {
             isSourceAutoDetectionEnabled = defaults.bool(forKey: SettingsKey.isSourceAutoDetectionEnabled)
         }
+        allowsCloudAudioTranscription = defaults.bool(forKey: SettingsKey.allowsCloudAudioTranscription)
         allowsCloudVideoFrames = defaults.bool(forKey: SettingsKey.allowsCloudVideoFrames)
         allowsVisualSalesCopy = defaults.bool(forKey: SettingsKey.allowsVisualSalesCopy)
         if let providerID = defaults.string(forKey: SettingsKey.translationProviderID),
@@ -513,6 +537,7 @@ final class TranslationSessionStore {
         let defaults = UserDefaults.standard
         defaults.set(sourceLanguage.id, forKey: SettingsKey.sourceLanguageID)
         defaults.set(isSourceAutoDetectionEnabled, forKey: SettingsKey.isSourceAutoDetectionEnabled)
+        defaults.set(allowsCloudAudioTranscription, forKey: SettingsKey.allowsCloudAudioTranscription)
         defaults.set(allowsCloudVideoFrames, forKey: SettingsKey.allowsCloudVideoFrames)
         defaults.set(allowsVisualSalesCopy, forKey: SettingsKey.allowsVisualSalesCopy)
         defaults.set(translationProvider.rawValue, forKey: SettingsKey.translationProviderID)

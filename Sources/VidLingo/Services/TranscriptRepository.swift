@@ -50,7 +50,8 @@ struct TranscriptRepository {
         videoFileName: String,
         kind: TranscriptArtifactKind,
         frameData: [Data] = [],
-        sourceIdentity: String? = nil
+        sourceIdentity: String? = nil,
+        timedSegments: [TimedTranscriptSegment] = []
     ) throws -> PublishedTranscriptArtifact {
         let manifest = TranscriptArtifactManifest(
             id: UUID().uuidString,
@@ -63,13 +64,15 @@ struct TranscriptRepository {
             videoFileName: videoFileName,
             sourceIdentity: sourceIdentity,
             frameCount: frameData.isEmpty ? nil : frameData.count,
-            frameDigest: Self.frameDigest(frameData)
+            frameDigest: Self.frameDigest(frameData),
+            timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
         )
         return try ArtifactPublisher.publish(
             sourceText: sourceText,
             translatedText: translatedText,
             manifest: manifest,
             in: currentDirectoryURL,
+            timelineText: timedSegments.isEmpty ? nil : SRTTimelineCodec.encode(timedSegments),
             fileManager: fileManager
         )
     }
@@ -87,6 +90,18 @@ struct TranscriptRepository {
         }
 
         let oldManifest = transcript.manifest
+        let timedSegments: [TimedTranscriptSegment]
+        if sourceText == transcript.sourceText {
+            timedSegments = translatedText == transcript.translatedText
+                ? transcript.timedSegments
+                : transcript.timedSegments.map { segment in
+                    var sourceOnlySegment = segment
+                    sourceOnlySegment.translatedText = nil
+                    return sourceOnlySegment
+                }
+        } else {
+            timedSegments = []
+        }
         let manifest = TranscriptArtifactManifest(
             id: UUID().uuidString,
             createdAt: Date(),
@@ -98,13 +113,15 @@ struct TranscriptRepository {
             videoFileName: oldManifest?.videoFileName,
             sourceIdentity: oldManifest?.sourceIdentity,
             frameCount: oldManifest?.frameCount,
-            frameDigest: oldManifest?.frameDigest
+            frameDigest: oldManifest?.frameDigest,
+            timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
         )
         let published = try ArtifactPublisher.publish(
             sourceText: sourceText,
             translatedText: translatedText,
             manifest: manifest,
             in: currentDirectoryURL,
+            timelineText: timedSegments.isEmpty ? nil : SRTTimelineCodec.encode(timedSegments),
             fileManager: fileManager
         )
 
@@ -147,16 +164,18 @@ struct TranscriptRepository {
         }
     }
 
-    func deleteAllCurrent(_ transcripts: [SavedTranscript]) -> Int {
-        var failures = 0
+    func deleteAllCurrent(_ transcripts: [SavedTranscript]) -> TranscriptDeletionResult {
+        var deletedIDs = [String]()
+        var failedIDs = [String]()
         for transcript in transcripts where !transcript.isLegacy {
             do {
                 try delete(transcript)
+                deletedIDs.append(transcript.id)
             } catch {
-                failures += 1
+                failedIDs.append(transcript.id)
             }
         }
-        return failures
+        return TranscriptDeletionResult(deletedIDs: deletedIDs, failedIDs: failedIDs)
     }
 
     func importLegacy(_ transcripts: [SavedTranscript]) -> (imported: Int, skipped: Int, failed: Int) {
@@ -222,6 +241,7 @@ struct TranscriptRepository {
             return nil
         }
         let updatedAt = (try? directoryURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? manifest.createdAt
+        let timedSegments = loadTimeline(from: directoryURL, manifest: manifest)
         return SavedTranscript(
             id: "\(origin.rawValue):\(manifest.id)",
             sourceFileURL: sourceURL,
@@ -231,7 +251,8 @@ struct TranscriptRepository {
             updatedAt: updatedAt,
             origin: origin,
             artifactKind: manifest.kind,
-            manifest: manifest
+            manifest: manifest,
+            timedSegments: timedSegments
         )
     }
 
@@ -261,6 +282,22 @@ struct TranscriptRepository {
         return try decoder.decode(TranscriptArtifactManifest.self, from: data)
     }
 
+    private func loadTimeline(
+        from directoryURL: URL,
+        manifest: TranscriptArtifactManifest
+    ) -> [TimedTranscriptSegment] {
+        guard let fileName = manifest.timelineFileName,
+              fileName.range(of: #"[/\\]"#, options: .regularExpression) == nil,
+              let text = try? String(
+                contentsOf: directoryURL.appendingPathComponent(fileName),
+                encoding: .utf8
+              ),
+              let segments = try? SRTTimelineCodec.decode(text) else {
+            return []
+        }
+        return segments
+    }
+
     private static func frameDigest(_ frames: [Data]) -> String? {
         guard !frames.isEmpty else { return nil }
         var hasher = SHA256()
@@ -278,7 +315,12 @@ struct TranscriptRepository {
     }
 }
 
-enum TranscriptRepositoryError: LocalizedError {
+struct TranscriptDeletionResult: Sendable, Equatable {
+    let deletedIDs: [String]
+    let failedIDs: [String]
+}
+
+enum TranscriptRepositoryError: LocalizedError, Equatable {
     case translationMissing
     case legacyReadOnly
     case rollbackFailed(String)

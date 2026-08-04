@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import VidLingoCore
 
 private enum DraftEditorField: Hashable {
     case source
@@ -153,18 +154,35 @@ struct TranscriptLibraryView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                HStack(alignment: .top, spacing: 12) {
-                    draftEditorPane(
-                        title: AppText.original,
-                        text: $session.savedDraftSourceText,
-                        isEditable: !selectedTranscript.isLegacy
-                    )
-                    draftEditorPane(
-                        title: AppText.translation,
-                        text: $session.savedDraftTranslationText,
-                        isEditable: !selectedTranscript.isLegacy
-                    )
+                TabView {
+                    HStack(alignment: .top, spacing: 12) {
+                        draftEditorPane(
+                            title: AppText.original,
+                            text: $session.savedDraftSourceText,
+                            isEditable: !selectedTranscript.isLegacy
+                        )
+                        draftEditorPane(
+                            title: AppText.translation,
+                            text: $session.savedDraftTranslationText,
+                            isEditable: !selectedTranscript.isLegacy
+                        )
+                    }
+                    .tabItem {
+                        Label(AppText.savedTextTab, systemImage: "doc.text")
+                    }
+
+                    if selectedTranscript.hasTimeline {
+                        TimelineTranscriptPane(
+                            segments: selectedTranscript.timedSegments,
+                            fallbackTranslation: selectedTranscript.translatedText ?? "",
+                            seekPreview: nil
+                        )
+                        .tabItem {
+                            Label(AppText.savedTimelineTab, systemImage: "clock")
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 HStack {
                     Button {

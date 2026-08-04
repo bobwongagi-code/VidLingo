@@ -114,6 +114,7 @@ enum OfflineVideoAudioExtractor {
 }
 
 enum OfflineVideoTranslationError: LocalizedError {
+    case cloudAudioConsentRequired
     case ffmpegNotFound
     case audioExtractionFailed(String)
     case audioTooLarge
@@ -124,6 +125,8 @@ enum OfflineVideoTranslationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .cloudAudioConsentRequired:
+            AppText.cloudAudioConsentRequired
         case .ffmpegNotFound:
             "ffmpeg not found. Install it with Homebrew before importing a video."
         case let .audioExtractionFailed(message):

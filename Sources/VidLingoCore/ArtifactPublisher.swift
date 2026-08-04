@@ -18,6 +18,7 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
     public let sourceIdentity: String?
     public let frameCount: Int?
     public let frameDigest: String?
+    public let timelineFileName: String?
 
     public init(
         id: String,
@@ -30,9 +31,10 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
         videoFileName: String?,
         sourceIdentity: String? = nil,
         frameCount: Int? = nil,
-        frameDigest: String? = nil
+        frameDigest: String? = nil,
+        timelineFileName: String? = nil
     ) {
-        self.schemaVersion = 1
+        self.schemaVersion = 2
         self.id = id
         self.createdAt = createdAt
         self.kind = kind
@@ -44,6 +46,7 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
         self.sourceIdentity = sourceIdentity
         self.frameCount = frameCount
         self.frameDigest = frameDigest
+        self.timelineFileName = timelineFileName
     }
 }
 
@@ -53,6 +56,7 @@ public struct PublishedTranscriptArtifact: Sendable {
     public let sourceFileURL: URL
     public let translationFileURL: URL
     public let manifestFileURL: URL
+    public let timelineFileURL: URL?
     public let manifest: TranscriptArtifactManifest
 }
 
@@ -82,6 +86,7 @@ public enum ArtifactPublisher {
         translatedText: String,
         manifest: TranscriptArtifactManifest,
         in directoryURL: URL,
+        timelineText: String? = nil,
         fileManager: FileManager = .default
     ) throws -> PublishedTranscriptArtifact {
         guard !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -112,6 +117,20 @@ public enum ArtifactPublisher {
             let manifestFileURL = stagingDirectoryURL.appendingPathComponent("manifest.json")
             try sourceText.write(to: sourceFileURL, atomically: true, encoding: .utf8)
             try translatedText.write(to: translationFileURL, atomically: true, encoding: .utf8)
+            let timelineFileURL: URL?
+            if let timelineText,
+               !timelineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let timelineFileName = manifest.timelineFileName {
+                guard timelineFileName.range(of: #"[/\\]"#, options: .regularExpression) == nil,
+                      !timelineFileName.isEmpty else {
+                    throw ArtifactPublisherError.destinationUnavailable
+                }
+                let url = stagingDirectoryURL.appendingPathComponent(timelineFileName)
+                try timelineText.write(to: url, atomically: true, encoding: .utf8)
+                timelineFileURL = url
+            } else {
+                timelineFileURL = nil
+            }
 
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -125,6 +144,7 @@ public enum ArtifactPublisher {
                 sourceFileURL: finalDirectoryURL.appendingPathComponent("original.txt"),
                 translationFileURL: finalDirectoryURL.appendingPathComponent("translation.txt"),
                 manifestFileURL: finalDirectoryURL.appendingPathComponent("manifest.json"),
+                timelineFileURL: timelineFileURL.map { finalDirectoryURL.appendingPathComponent($0.lastPathComponent) },
                 manifest: manifest
             )
         } catch {

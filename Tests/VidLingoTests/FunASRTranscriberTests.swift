@@ -44,4 +44,34 @@ final class FunASRTranscriberTests: XCTestCase {
         XCTAssertEqual(parameters["sample_rate"] as? Int, 16_000)
         XCTAssertEqual(parameters["language_hints"] as? [String], ["th"])
     }
+
+    func testParsesStreamingTextAndFinalSentenceTimestamps() throws {
+        let lines = [
+            "event:result",
+            #"data:{"output":{"text":"第一句","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":760,"end_time":3800,"text":"第一句"}}}"#,
+            #"data:{"output":{"text":"第一句第二句","sentence":{"sentence_id":2,"sentence_end":true,"begin_time":4200,"end_time":6950,"text":"第二句"}}}"#,
+            "data:[DONE]"
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "第一句第二句")
+        XCTAssertEqual(result.segments.map(\.id), [1, 2])
+        XCTAssertEqual(result.segments[0].startMilliseconds, 760)
+        XCTAssertEqual(result.segments[0].endMilliseconds, 3_800)
+        XCTAssertEqual(result.segments[1].startMilliseconds, 4_200)
+        XCTAssertEqual(result.segments[1].endMilliseconds, 6_950)
+    }
+
+    func testIgnoresIntermediateSentenceWithoutFinalTimestamp() throws {
+        let lines = [
+            #"data:{"output":{"text":"正在说到一半","sentence":{"sentence_id":1,"sentence_end":false,"text":"正在说到一半"}}}"#,
+            #"data:{"output":{"text":"完整一句"}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "完整一句")
+        XCTAssertTrue(result.segments.isEmpty)
+    }
 }

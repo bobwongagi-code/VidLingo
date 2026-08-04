@@ -30,6 +30,8 @@ struct SidebarView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
+            Toggle(AppText.cloudAudioTranscriptionConsent, isOn: $session.allowsCloudAudioTranscription)
+                .disabled(session.isOfflineVideoProcessing)
             Toggle(AppText.cloudVideoFramesConsent, isOn: $session.allowsCloudVideoFrames)
                 .disabled(session.isOfflineVideoProcessing)
             Toggle(AppText.visualSalesCopyConsent, isOn: $session.allowsVisualSalesCopy)
