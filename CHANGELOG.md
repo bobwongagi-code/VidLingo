@@ -4,6 +4,7 @@ All notable changes to VidLingo are documented in this file.
 
 ## Unreleased
 
+- Added a bilingual timestamp timeline built from Fun-ASR word timestamps, with local pause-aware segmentation, aligned translation columns, and video seeking.
 - Removed legacy specialist-transcription, remote-review, and local transcript-selection paths.
 - Replaced local transcription dependencies with the Fun-ASR Flash cloud transcription path.
 

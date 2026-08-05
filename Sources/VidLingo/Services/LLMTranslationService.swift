@@ -532,7 +532,7 @@ actor LLMTranslationService {
 
     static func qwenMTTimedInput(_ segments: [TimedTranscriptSegment]) -> String {
         segments.map { segment in
-            "<<<VIDLINGO_SEGMENT_(segment.id)>>>\n\(segment.sourceText)"
+            "<<<VIDLINGO_SEGMENT_\(segment.id)>>>\n\(segment.sourceText)"
         }.joined(separator: "\n\n")
     }
 

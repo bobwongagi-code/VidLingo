@@ -75,7 +75,7 @@ final class TranslationSessionStore {
     var offlineVideoExecutionPlan: String {
         var steps = ["本地提取音频"]
         if allowsCloudAudioTranscription {
-            steps.append("上传口播音频到 Fun-ASR \(FunASRTranscriber.modelName) 完整转写并保留句级时间轴（1 次云端调用，可能产生费用）")
+            steps.append("上传口播音频到 Fun-ASR \(FunASRTranscriber.modelName) 完整转写，按词级时间戳在本地分段（1 次云端调用，可能产生费用）")
         } else {
             steps.append("等待允许上传音频到 Fun-ASR")
         }
