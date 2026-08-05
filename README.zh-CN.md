@@ -35,7 +35,7 @@ VidLingo 用统一的 Chat Completions 风格请求支持这些内置服务：
 ```text
 DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flash
 OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
-Qwen / 千问     https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
+Qwen / 千问     https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
 Qwen-MT        同一个千问 endpoint，模型名如 qwen-mt-flash 或 qwen-mt-plus
 OpenRouter / Claude  https://openrouter.ai/api/v1/chat/completions  anthropic/claude-sonnet-4.5
 Anthropic / Claude   https://api.anthropic.com/v1/messages             claude-sonnet-4-5
@@ -48,10 +48,10 @@ API key 会按服务分别保存在 macOS Keychain 中。旧 DeepSeek key 会继
 
 当千问模型名以 `qwen-mt-` 开头时，VidLingo 会使用 Qwen-MT 要求的 `translation_options` 请求格式，而不是普通 chat prompt。
 
-Fun-ASR 使用当前工作空间的原生接口：
+Fun-ASR 使用工作空间对应的原生接口，请将 `<workspace-id>` 替换为你自己的部署 ID：
 
 ```text
-https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+https://<workspace-id>.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
 fun-asr-flash-2026-06-15
 ```
 
