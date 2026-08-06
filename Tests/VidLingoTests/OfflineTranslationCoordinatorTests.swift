@@ -23,8 +23,7 @@ final class OfflineTranslationCoordinatorTests: XCTestCase {
             _ = try await OfflineTranslationCoordinator().run(
                 request: request,
                 token: token,
-                reportProgress: { _ in },
-                reportTranscription: { _, _ in }
+                reportProgress: { _ in }
             )
             XCTFail("Expected explicit cloud audio consent to be required")
         } catch let error as OfflineVideoTranslationError {

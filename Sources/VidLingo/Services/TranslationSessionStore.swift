@@ -226,19 +226,14 @@ final class TranslationSessionStore {
                         await MainActor.run {
                             self.statusMessage = message
                         }
-                    },
-                    reportTranscription: { sourceText, sourceDescription in
-                        await MainActor.run {
-                            self.transcriptionSourceDescription = sourceDescription
-                            self.timedSegments = []
-                            self.lines = [CaptionLine.partialTranscript(sourceText: sourceText)]
-                        }
                     }
                 )
                 transcriptionSourceDescription = result.sourceDescription
                 if !result.productContext.isEmpty {
                     offlineVideoProductContext = result.productContext
                 }
+                try token.check()
+                timedSegments = result.timedSegments
                 lines = [CaptionLine(
                     sourceText: result.sourceText,
                     translatedText: result.translatedText,
@@ -247,8 +242,6 @@ final class TranslationSessionStore {
                     isFinal: true,
                     revision: 2
                 )]
-                timedSegments = result.timedSegments
-                try token.check()
                 if let kind = result.artifactKind {
                     try saveOfflineVideoTranscript(
                         sourceText: result.sourceText,

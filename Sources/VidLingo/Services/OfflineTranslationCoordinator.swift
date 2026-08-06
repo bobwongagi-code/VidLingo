@@ -30,13 +30,11 @@ struct OfflineTranslationRunResult: Sendable {
 
 struct OfflineTranslationCoordinator {
     typealias ProgressHandler = @Sendable (String) async -> Void
-    typealias TranscriptionHandler = @Sendable (String, String) async -> Void
 
     func run(
         request: OfflineTranslationRunRequest,
         token: ProcessCancellationToken,
-        reportProgress: @escaping ProgressHandler,
-        reportTranscription: @escaping TranscriptionHandler
+        reportProgress: @escaping ProgressHandler
     ) async throws -> OfflineTranslationRunResult {
         var audioURL: URL?
         var stageTimings = [OfflineTranslationStageTiming]()
@@ -125,8 +123,6 @@ struct OfflineTranslationCoordinator {
             let timedSegments = transcription.hasWordTimestamps || rawTimedSegments.count > 1
                 ? rawTimedSegments
                 : []
-            await reportTranscription(sourceText, AppText.funASRSource)
-
             guard SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
                 sourceText,
                 language: sourceLanguage

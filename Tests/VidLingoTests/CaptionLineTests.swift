@@ -2,12 +2,22 @@ import XCTest
 @testable import VidLingo
 
 final class CaptionLineTests: XCTestCase {
-    func testPartialTranscriptKeepsLocalSourceText() {
-        let line = CaptionLine.partialTranscript(sourceText: "Fun-ASR 已完成转写")
-
-        XCTAssertEqual(line.sourceText, "Fun-ASR 已完成转写")
-        XCTAssertEqual(line.translatedSourceText, "Fun-ASR 已完成转写")
-        XCTAssertTrue(line.translatedText.isEmpty)
-        XCTAssertFalse(line.isFinal)
+    func testTranscriptResultDisplayStateKeepsProcessingBeforeFinalResult() {
+        XCTAssertEqual(
+            TranscriptResultDisplayState.resolve(isProcessing: true, hasResult: true, hasVideo: true),
+            .processing
+        )
+        XCTAssertEqual(
+            TranscriptResultDisplayState.resolve(isProcessing: false, hasResult: true, hasVideo: true),
+            .completed
+        )
+        XCTAssertEqual(
+            TranscriptResultDisplayState.resolve(isProcessing: false, hasResult: false, hasVideo: true),
+            .waiting
+        )
+        XCTAssertEqual(
+            TranscriptResultDisplayState.resolve(isProcessing: false, hasResult: false, hasVideo: false),
+            .noVideo
+        )
     }
 }

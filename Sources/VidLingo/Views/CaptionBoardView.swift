@@ -5,6 +5,20 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VidLingoCore
 
+enum TranscriptResultDisplayState: Equatable {
+    case noVideo
+    case waiting
+    case processing
+    case completed
+
+    static func resolve(isProcessing: Bool, hasResult: Bool, hasVideo: Bool) -> Self {
+        if isProcessing { return .processing }
+        if hasResult { return .completed }
+        if hasVideo { return .waiting }
+        return .noVideo
+    }
+}
+
 struct CaptionBoardView: View {
     @Bindable var session: TranslationSessionStore
     @State private var previewPlayer: AVPlayer?
@@ -338,26 +352,43 @@ private struct TranscriptResultView: View {
     @Bindable var session: TranslationSessionStore
     let seekPreview: (Int) -> Void
 
+    private var displayState: TranscriptResultDisplayState {
+        TranscriptResultDisplayState.resolve(
+            isProcessing: session.isOfflineVideoProcessing,
+            hasResult: session.lines.last != nil,
+            hasVideo: session.offlineVideoURL != nil
+        )
+    }
+
     var body: some View {
-        if let line = session.lines.last {
-            if !session.timedSegments.isEmpty {
-                TimelineTranscriptPane(
-                    segments: session.timedSegments,
-                    fallbackTranslation: line.translatedText,
-                    seekPreview: seekPreview
-                )
-            } else {
-                HStack(alignment: .top, spacing: 16) {
-                    TranscriptPane(
-                        title: AppText.original,
-                        description: session.transcriptionSourceDescription,
-                        text: line.sourceText
+        switch displayState {
+        case .processing:
+            ProcessingResultPane(statusMessage: session.statusMessage)
+        case .completed:
+            if let line = session.lines.last {
+                if !session.timedSegments.isEmpty {
+                    TimelineTranscriptPane(
+                        segments: session.timedSegments,
+                        fallbackTranslation: line.translatedText,
+                        seekPreview: seekPreview
                     )
-                    TranscriptPane(title: AppText.translation, description: AppText.translationDescription, text: line.translatedText)
+                } else {
+                    HStack(alignment: .top, spacing: 16) {
+                        TranscriptPane(
+                            title: AppText.original,
+                            description: session.transcriptionSourceDescription,
+                            text: line.sourceText
+                        )
+                        TranscriptPane(title: AppText.translation, description: AppText.translationDescription, text: line.translatedText)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ResultUnavailablePane(statusMessage: session.statusMessage)
             }
-        } else {
+        case .waiting:
+            ResultUnavailablePane(statusMessage: session.statusMessage)
+        case .noVideo:
             ContentUnavailableView(
                 AppText.noCaptionsYet,
                 systemImage: "captions.bubble",
@@ -366,6 +397,44 @@ private struct TranscriptResultView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
+    }
+}
+
+private struct ProcessingResultPane: View {
+    let statusMessage: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text(AppText.processingResultTitle)
+                .font(.title3.weight(.semibold))
+            Text(statusMessage)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            Text(AppText.processingResultDescription)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private struct ResultUnavailablePane: View {
+    let statusMessage: String
+
+    var body: some View {
+        ContentUnavailableView(
+            AppText.resultNotReady,
+            systemImage: "text.bubble",
+            description: Text(statusMessage)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
