@@ -13,4 +13,34 @@ final class LanguageTextDetectorTests: XCTestCase {
 
         XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "ms-MY")
     }
+
+    func testIgnoresSpanishMarkersInsideOtherWords() {
+        let text = "kelapa delima contact tuna porridge"
+
+        XCTAssertNil(LanguageTextDetector.detect(text))
+    }
+
+    func testDetectsMalayDespiteEmbeddedForeignMarkers() {
+        let text = "Nak beli kelapa delima contact tuna porridge boleh."
+
+        XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "ms-MY")
+    }
+
+    func testDetectsWholeSpanishMarkersWithCaseAndPunctuation() {
+        let text = "QUE, EL; LA! DE? PARA\nCON UNA POR."
+
+        XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "es-ES")
+    }
+
+    func testDetectsIndonesianFromWholeWords() {
+        let text = "Ini bisa untuk sofa dengan harga murah."
+
+        XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "id-ID")
+    }
+
+    func testDetectsEnglishFromWholeWords() {
+        let text = "This is for you and the family."
+
+        XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "en-US")
+    }
 }

@@ -26,10 +26,6 @@ enum LanguageTextDetector {
         func ratio(_ predicate: (UnicodeScalar) -> Bool) -> Double {
             Double(letters.filter(predicate).count) / Double(letters.count)
         }
-        func markerScore(_ markers: [String]) -> Double {
-            min(0.45, Double(markers.filter { normalizedText.contains($0) }.count) * 0.08)
-        }
-
         var score: Double
         switch language.id {
         case "th-TH":
@@ -48,6 +44,10 @@ enum LanguageTextDetector {
             let words = normalizedText
                 .split { !$0.isLetter && !$0.isNumber }
                 .map(String.init)
+            let wordSet = Set(words)
+            func markerScore(_ markers: [String]) -> Double {
+                min(0.45, Double(markers.filter { wordSet.contains($0) }.count) * 0.08)
+            }
             score = latinRatio * 0.55
             switch language.id {
             case "en-US":
