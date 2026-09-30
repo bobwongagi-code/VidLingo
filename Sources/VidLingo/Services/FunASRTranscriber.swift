@@ -12,7 +12,6 @@ struct FunASRTranscriber {
     static let maxDurationSeconds: Double = 5 * 60
     static let maxAudioBytes: Int64 = 7 * 1_024 * 1_024
 
-    private static let endpoint = URL(string: "https://llm-nlx73tfv3mm6w67e.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")!
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 240
@@ -27,7 +26,9 @@ struct FunASRTranscriber {
         languageHint: String? = nil
     ) async throws -> FunASRTranscription {
         try token.check()
-        guard let apiKey = try TranslationAPIKeyStore.readAPIKey(for: .qwen), !apiKey.isEmpty else {
+        let endpoint = FunASRConfiguration.endpoint
+        guard let apiKey = try TranslationAPIKeyStore.readAPIKey(service: FunASRConfiguration.keychainService),
+              !apiKey.isEmpty else {
             throw FunASRTranscriptionError.missingAPIKey
         }
 
@@ -50,17 +51,19 @@ struct FunASRTranscriber {
         request.timeoutInterval = 240
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("enable", forHTTPHeaderField: "X-DashScope-SSE")
+        // The complete JSON response keeps the same word timestamps without
+        // requiring the client to reconstruct a large SSE event stream.
+        request.setValue("disable", forHTTPHeaderField: "X-DashScope-SSE")
         request.httpBody = try requestData(
             audioData: audioData,
             productContext: productContext,
             languageHint: languageHint
         )
 
-        let bytes: URLSession.AsyncBytes
+        let responseData: Data
         let response: URLResponse
         do {
-            (bytes, response) = try await session.bytes(for: request)
+            (responseData, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .timedOut {
             throw FunASRTranscriptionError.requestTimedOut
         }
@@ -69,38 +72,16 @@ struct FunASRTranscriber {
             throw FunASRTranscriptionError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
             throw FunASRTranscriptionError.requestFailed(
                 statusCode: httpResponse.statusCode,
-                message: errorMessage(from: errorData)
+                message: errorMessage(from: responseData)
             )
-        }
-
-        var streamLines = [String]()
-        do {
-            for try await line in bytes.lines {
-                try token.check()
-                streamLines.append(line)
-            }
-        } catch ProcessSupervisorError.cancelled {
-            throw ProcessSupervisorError.cancelled
-        } catch ProcessSupervisorError.deadlineExceeded {
-            throw ProcessSupervisorError.deadlineExceeded
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as URLError where error.code == .timedOut {
-            throw FunASRTranscriptionError.requestTimedOut
-        } catch {
-            throw FunASRTranscriptionError.invalidResponse
         }
 
         try token.check()
         let transcription: FunASRTranscription
         do {
-            transcription = try Self.transcription(fromSSELines: streamLines)
+            transcription = try Self.transcription(fromJSONData: responseData)
         } catch {
             throw FunASRTranscriptionError.invalidResponse
         }
@@ -115,6 +96,13 @@ struct FunASRTranscriber {
             segments: segments,
             hasWordTimestamps: transcription.hasWordTimestamps
         )
+    }
+
+    private static func transcription(fromJSONData data: Data) throws -> FunASRTranscription {
+        guard !data.isEmpty else {
+            throw FunASRTranscriptionError.invalidResponse
+        }
+        return try transcription(fromSSELines: ["data:\(String(decoding: data, as: UTF8.self))"])
     }
 
     static func transcription(fromSSELines lines: [String]) throws -> FunASRTranscription {
@@ -425,7 +413,7 @@ enum FunASRTranscriptionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "Fun-ASR 转写需要先保存 Qwen / 千问 API key。"
+            return "Fun-ASR 转写需要先保存 Fun-ASR API key。"
         case .emptyAudio:
             return "没有可发送给 Fun-ASR 的音频。"
         case .audioTooLarge:

@@ -4,6 +4,7 @@ All notable changes to VidLingo are documented in this file.
 
 ## Unreleased
 
+- Added Rootify with gpt-5.6-luna for translation and visual recognition, kept Southeast Asia Fun-ASR with independent credentials and word timestamps, removed legacy translation providers, and simplified the settings interface.
 - Changed offline processing to keep Fun-ASR transcription internal, show one stable processing state, and render the final bilingual timeline only after translation is complete.
 - Added a bilingual timestamp timeline built from Fun-ASR word timestamps, with local pause-aware segmentation, aligned translation columns, and video seeking.
 - Removed legacy specialist-transcription, remote-review, and local transcript-selection paths.

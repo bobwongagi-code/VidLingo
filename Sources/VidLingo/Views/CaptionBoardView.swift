@@ -138,18 +138,6 @@ private struct OfflineVideoImportPanel: View {
                 .disabled(session.isOfflineVideoProcessing)
                 .help(AppText.inferringProductContextHelp)
 
-            if session.offlineVideoURL != nil, !session.isOfflineVideoProcessing {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(AppText.executionPlanTitle)
-                        .font(.caption.weight(.semibold))
-                    Text(session.offlineVideoExecutionPlan)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, 2)
-            }
-
             if let warning = session.offlineTranslationConfigurationWarning,
                session.offlineVideoURL != nil,
                !session.isOfflineVideoProcessing {

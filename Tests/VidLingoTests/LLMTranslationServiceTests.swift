@@ -24,17 +24,17 @@ final class LLMTranslationServiceTests: XCTestCase {
         XCTAssertFalse(structuredPrompt.contains("只能**包含中文译文正文本身"))
     }
 
-    func testTimedTranslationSupportsCustomAndQwenMTModels() {
+    func testTimedTranslationSupportsCustomAndRootifyModels() {
         XCTAssertTrue(LLMTranslationService.supportsTimedTranslation(
             provider: .custom,
             modelName: "custom-model"
         ))
         XCTAssertTrue(LLMTranslationService.supportsTimedTranslation(
-            provider: .qwen,
-            modelName: "qwen-mt-flash"
+            provider: .rootify,
+            modelName: "gpt-5.6-luna"
         ))
         XCTAssertFalse(LLMTranslationService.supportsTimedTranslation(
-            provider: .qwen,
+            provider: .rootify,
             modelName: "   "
         ))
     }
@@ -53,33 +53,4 @@ final class LLMTranslationServiceTests: XCTestCase {
         ])
     }
 
-    func testParsesQwenMTTaggedTranslationsAndRejectsMissingSegments() {
-        let segments = [
-            TimedTranscriptSegment(id: 1, startMilliseconds: 0, endMilliseconds: 1_000, sourceText: "第一句"),
-            TimedTranscriptSegment(id: 2, startMilliseconds: 1_100, endMilliseconds: 2_000, sourceText: "第二句")
-        ]
-        let input = LLMTranslationService.qwenMTTimedInput(segments)
-
-        XCTAssertTrue(input.contains("<<<VIDLINGO_SEGMENT_1>>>\n第一句"))
-        XCTAssertTrue(input.contains("<<<VIDLINGO_SEGMENT_2>>>\n第二句"))
-
-        let output = """
-        <<<VIDLINGO_SEGMENT_1>>>
-        第一段译文
-
-        <<<VIDLINGO_SEGMENT_2>>>
-        第二段译文
-        """
-        XCTAssertEqual(
-            LLMTranslationService.parseQwenMTTimedTranslations(from: output, expectedIDs: [1, 2]),
-            [
-                TimedTranslationItem(id: 1, translation: "第一段译文"),
-                TimedTranslationItem(id: 2, translation: "第二段译文")
-            ]
-        )
-        XCTAssertNil(LLMTranslationService.parseQwenMTTimedTranslations(
-            from: "<<<VIDLNGO_SEGMENT_1>>>\n只有一段",
-            expectedIDs: [1, 2]
-        ))
-    }
 }

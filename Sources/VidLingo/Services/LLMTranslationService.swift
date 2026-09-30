@@ -18,10 +18,6 @@ actor LLMTranslationService {
         productContextVisionModel(provider: provider, currentModel: modelName) != nil
     }
 
-    static func isTranslationOnlyModel(provider: TranslationProviderID, modelName: String) -> Bool {
-        provider.capabilities(for: modelName).isTranslationOnly
-    }
-
     private func adapter(for provider: TranslationProviderID) -> any LLMProviderAdapter {
         LLMProviderAdapterFactory.make(for: provider)
     }
@@ -57,12 +53,7 @@ actor LLMTranslationService {
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if provider.usesAnthropicMessagesAPI {
-            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        } else {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         return (request, model)
     }
 
@@ -79,9 +70,6 @@ actor LLMTranslationService {
         token: ProcessCancellationToken
     ) async throws -> String {
         guard !text.isEmpty else { return "" }
-        guard !Self.isTranslationOnlyModel(provider: provider, modelName: modelName) else {
-            return ""
-        }
         try token.check()
 
         let (request, model) = try preparedRequest(
@@ -193,19 +181,6 @@ actor LLMTranslationService {
         }
         try token.check()
 
-        if provider == .qwen, modelName.lowercased().hasPrefix("qwen-mt-") {
-            return try await translateTimedTranscriptWithQwenMT(
-                text,
-                timedSegments: timedSegments,
-                source: source,
-                target: target,
-                productContext: productContext,
-                modelName: modelName,
-                customBaseURL: customBaseURL,
-                token: token
-            )
-        }
-
         let (request, model) = try preparedRequest(
             provider: provider,
             modelName: modelName,
@@ -225,8 +200,7 @@ actor LLMTranslationService {
             userText: configuration.userText,
             options: LLMGenerationOptions(
                 temperature: 0.2,
-                maxTokens: 2_500,
-                enableThinking: nonThinkingTranslationMode(provider: provider, modelName: modelName)
+                maxTokens: 2_500
             ),
             provider: provider
         )
@@ -285,59 +259,6 @@ actor LLMTranslationService {
             token: token
         )
         return TimedTranscriptTranslation(text: translatedText, segments: [])
-    }
-
-    private func translateTimedTranscriptWithQwenMT(
-        _ text: String,
-        timedSegments: [TimedTranscriptSegment],
-        source: LanguageOption,
-        target: LanguageOption,
-        productContext: String,
-        modelName: String,
-        customBaseURL: String,
-        token: ProcessCancellationToken
-    ) async throws -> TimedTranscriptTranslation {
-        let (request, model) = try preparedRequest(
-            provider: .qwen,
-            modelName: modelName,
-            customBaseURL: customBaseURL,
-            timeout: RequestTimeout.transcriptTranslation
-        )
-        let configuration = translationRequestConfiguration(
-            text,
-            source: source,
-            target: target,
-            productContext: productContext,
-            provider: .qwen,
-            modelName: model
-        )
-        let output = try await adapter(for: .qwen).sendText(
-            request: request,
-            model: model,
-            system: "",
-            userText: Self.qwenMTTimedInput(timedSegments),
-            options: configuration.options,
-            provider: .qwen
-        )
-        try token.check()
-
-        guard let translations = Self.parseQwenMTTimedTranslations(
-            from: output,
-            expectedIDs: timedSegments.map(\.id)
-        ) else {
-            return unalignedTranslation(from: output)
-        }
-
-        let translationsByID = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.translation) })
-        let segments = timedSegments.map { segment in
-            var translatedSegment = segment
-            translatedSegment.translatedText = translationsByID[segment.id]
-            return translatedSegment
-        }
-        return TimedTranscriptTranslation(
-            text: segments.compactMap(\.translatedText).joined(separator: "\n"),
-            segments: segments
-        )
     }
 
     private func unalignedTranslation(from output: String) -> TimedTranscriptTranslation {
@@ -433,24 +354,6 @@ actor LLMTranslationService {
         provider: TranslationProviderID,
         modelName: String
     ) -> (system: String, userText: String, options: LLMGenerationOptions) {
-        if provider == .qwen, modelName.lowercased().hasPrefix("qwen-mt-") {
-            return (
-                system: "",
-                userText: text,
-                options: LLMGenerationOptions(
-                    temperature: nil,
-                    maxTokens: 2_500,
-                    translationOptions: TranslationOptions(
-                    sourceLanguage: "auto",
-                    targetLanguage: "Chinese",
-                    terms: qwenMTTerms,
-                    domains: qwenMTDomainPrompt(productContext),
-                    translationMemory: qwenMTTranslationMemory
-                    )
-                )
-            )
-        }
-
         let context = productContext.trimmingCharacters(in: .whitespacesAndNewlines)
         let guardrails = translationGuardrails(for: source)
         let userPrompt = """
@@ -472,8 +375,7 @@ actor LLMTranslationService {
             userText: userPrompt,
             options: LLMGenerationOptions(
                 temperature: 0.2,
-                maxTokens: 2_500,
-                enableThinking: nonThinkingTranslationMode(provider: provider, modelName: modelName)
+                maxTokens: 2_500
             )
         )
     }
@@ -528,77 +430,6 @@ actor LLMTranslationService {
             throw TimedTranslationParsingError.invalidOutput
         }
         return items
-    }
-
-    static func qwenMTTimedInput(_ segments: [TimedTranscriptSegment]) -> String {
-        segments.map { segment in
-            "<<<VIDLINGO_SEGMENT_\(segment.id)>>>\n\(segment.sourceText)"
-        }.joined(separator: "\n\n")
-    }
-
-    static func parseQwenMTTimedTranslations(
-        from text: String,
-        expectedIDs: [Int]
-    ) -> [TimedTranslationItem]? {
-        let markerPrefix = "<<<VIDLINGO_SEGMENT_"
-        var translations = [TimedTranslationItem]()
-        var currentID: Int?
-        var currentLines = [String]()
-
-        for line in text.components(separatedBy: .newlines) {
-            guard let markerStart = line.range(of: markerPrefix),
-                  markerStart.lowerBound == line.startIndex,
-                  let markerEnd = line.range(of: ">>>", range: markerStart.upperBound..<line.endIndex) else {
-                if currentID != nil {
-                    currentLines.append(line)
-                }
-                continue
-            }
-
-            if let currentID {
-                let translation = currentLines.joined(separator: "\n")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                translations.append(TimedTranslationItem(id: currentID, translation: translation))
-            }
-
-            let idText = String(line[markerStart.upperBound..<markerEnd.lowerBound])
-            guard let id = Int(idText) else { return nil }
-            currentID = id
-            let remainder = String(line[markerEnd.upperBound...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            currentLines = remainder.isEmpty ? [] : [remainder]
-        }
-
-        if let currentID {
-            let translation = currentLines.joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            translations.append(TimedTranslationItem(id: currentID, translation: translation))
-        }
-
-        let expectedSet = Set(expectedIDs)
-        let actualIDs = translations.map(\.id)
-        guard !expectedIDs.isEmpty,
-              actualIDs.count == expectedIDs.count,
-              Set(actualIDs).count == actualIDs.count,
-              Set(actualIDs) == expectedSet,
-              translations.allSatisfy({ !$0.translation.isEmpty }) else {
-            return nil
-        }
-        return translations
-    }
-
-    private func nonThinkingTranslationMode(
-        provider: TranslationProviderID,
-        modelName: String
-    ) -> Bool? {
-        guard provider == .qwen else { return nil }
-        let normalizedName = modelName.lowercased()
-        guard normalizedName.hasPrefix("qwen3.5")
-                || normalizedName.hasPrefix("qwen3.6")
-                || normalizedName.hasPrefix("qwen3.7") else {
-            return nil
-        }
-        return false
     }
 
     private func productContextPrompt(_ text: String, fileName: String, source: LanguageOption) -> String {
@@ -767,27 +598,6 @@ actor LLMTranslationService {
         provider.capabilities(for: model).supportsVision ? model : nil
     }
 
-    private func qwenMTDomainPrompt(_ productContext: String) -> String? {
-        let context = productContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        let productLine = context.isEmpty
-            ? ""
-            : "\nProduct context: \(context)"
-        return """
-        This is a Southeast Asian e-commerce live streaming script from TikTok Shop or Shopee.
-        The speaker is a product host demonstrating household or consumer products while talking.
-        Translation requirements:
-        1. Use casual, conversational Chinese suitable for short video subtitles.
-        2. Preserve short sentence rhythm, do not merge short sentences into long ones.
-        3. Preserve repeated phrases that reflect live demonstration rhythm.
-        4. Translate filler words like lah, kan, tau, and haa into natural Chinese equivalents like 嘛, 对吧, 哦, and 哈.
-        5. If an opening noun contradicts the product being demonstrated, translate it as a neutral product reference like 就这款 instead of its literal meaning.
-        6. Translate the call-to-action sentence at the end with clear purchase intent.
-        7. Do not add product specs, ratings, effects, accessories, discounts, or urgency words that are not present in the transcript.
-        8. If the ASR text is unclear, keep the translation broad and natural instead of inventing details.
-        \(productLine)
-        """
-    }
-
     private func translationGuardrails(for source: LanguageOption) -> String {
         switch source.id {
         case "th-TH":
@@ -814,50 +624,6 @@ actor LLMTranslationService {
             - 输出只保留译文正文，不要翻译说明、判断依据、标题或括号注释。
             """
         }
-    }
-
-    private var qwenMTTerms: [TranslationTerm] {
-        [
-            .init(source: "back kuning", target: "黄色购物车"),
-            .init(source: "beg kuning", target: "黄色购物车"),
-            .init(source: "jebag kuning", target: "黄色购物车"),
-            .init(source: "bakul kuning", target: "黄色购物车"),
-            .init(source: "keranjang kuning", target: "黄色购物车"),
-            .init(source: "link di bawah", target: "下方链接"),
-            .init(source: "Bruce", target: "刷头"),
-            .init(source: "brus", target: "刷头"),
-            .init(source: "nozzle", target: "吸嘴"),
-            .init(source: "kipas", target: "风扇"),
-            .init(source: "kipar", target: "风扇"),
-            .init(source: "karpet", target: "地毯"),
-            .init(source: "kapek", target: "地毯"),
-            .init(source: "tilam", target: "床垫")
-        ]
-    }
-
-    private var qwenMTTranslationMemory: [TranslationMemoryEntry] {
-        [
-            .init(
-                source: "Klik back kuning untuk beli sekarang.",
-                target: "点击黄色购物车立即下单。"
-            ),
-            .init(
-                source: "Haa senang kan?",
-                target: "哈，简单吧？"
-            ),
-            .init(
-                source: "Yang ni memang terbaik.",
-                target: "这款真的是最好的。"
-            ),
-            .init(
-                source: "Harga dia pun murah.",
-                target: "价格也很便宜。"
-            ),
-            .init(
-                source: "Tengok ni, senang je.",
-                target: "你看，很简单的。"
-            )
-        ]
     }
 
     private var systemPrompt: String {

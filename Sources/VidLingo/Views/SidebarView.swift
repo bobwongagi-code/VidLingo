@@ -36,14 +36,9 @@ struct SidebarView: View {
                 .disabled(session.isOfflineVideoProcessing)
             Toggle(AppText.visualSalesCopyConsent, isOn: $session.allowsVisualSalesCopy)
                 .disabled(session.isOfflineVideoProcessing)
-            Text(AppText.funASRCloudNotice)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(AppText.cloudConsentHelp)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -96,6 +91,7 @@ struct SidebarView: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -123,73 +119,59 @@ struct SidebarView: View {
                     .disabled(session.isOfflineVideoProcessing)
             }
 
-            SecureField(AppText.translationAPIKeyPlaceholder(session.translationProvider.title), text: $apiKey)
-                .textFieldStyle(.roundedBorder)
+            DisclosureGroup("管理密钥") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("翻译 API key")
+                        .font(.caption.weight(.semibold))
+                    SecureField(AppText.translationAPIKeyPlaceholder(session.translationProvider.title), text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
 
-            HStack {
-                Text(AppText.keychainAvailabilityText(session.translationAPIKeyAvailability))
-                    .font(.caption)
-                    .foregroundStyle(session.translationAPIKeyAvailability == .configured ? .green : .secondary)
-                Spacer()
-                Button(AppText.saveTranslationAPIKey) {
-                    session.saveTranslationAPIKey(apiKey)
-                    apiKey = ""
-                }
-                .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+                    HStack {
+                        Text(AppText.keychainAvailabilityText(session.translationAPIKeyAvailability))
+                            .font(.caption)
+                            .foregroundStyle(session.translationAPIKeyAvailability == .configured ? .green : .secondary)
+                        Spacer()
+                        Button(AppText.saveTranslationAPIKey) {
+                            session.saveTranslationAPIKey(apiKey)
+                            apiKey = ""
+                        }
+                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
 
-            Button(AppText.removeTranslationAPIKey) {
-                session.removeTranslationAPIKey()
-                apiKey = ""
-            }
-            .disabled(!session.hasTranslationAPIKey)
+                    Button(AppText.removeTranslationAPIKey) {
+                        session.removeTranslationAPIKey()
+                        apiKey = ""
+                    }
+                    .disabled(!session.hasTranslationAPIKey)
 
-            if session.translationProvider != .qwen {
-                Divider()
-                Text("Fun-ASR / Qwen API key")
-                    .font(.caption.weight(.semibold))
-                SecureField("粘贴 Fun-ASR 使用的 Qwen API key", text: $funASRAPIKey)
-                    .textFieldStyle(.roundedBorder)
+                    Divider()
+                    Text("Fun-ASR API key")
+                        .font(.caption.weight(.semibold))
+                    SecureField("粘贴 Fun-ASR API key", text: $funASRAPIKey)
+                        .textFieldStyle(.roundedBorder)
 
-                HStack {
-                    Text(AppText.keychainAvailabilityText(session.funASRAPIKeyAvailability))
-                        .font(.caption)
-                        .foregroundStyle(session.hasFunASRAPIKey ? .green : .secondary)
-                    Spacer()
-                    Button(AppText.saveTranslationAPIKey) {
-                        session.saveFunASRAPIKey(funASRAPIKey)
+                    HStack {
+                        Text(AppText.keychainAvailabilityText(session.funASRAPIKeyAvailability))
+                            .font(.caption)
+                            .foregroundStyle(session.hasFunASRAPIKey ? .green : .secondary)
+                        Spacer()
+                        Button(AppText.saveTranslationAPIKey) {
+                            session.saveFunASRAPIKey(funASRAPIKey)
+                            funASRAPIKey = ""
+                        }
+                        .disabled(funASRAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+
+                    Button(AppText.removeTranslationAPIKey) {
+                        session.removeFunASRAPIKey()
                         funASRAPIKey = ""
                     }
-                    .disabled(funASRAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                Button(AppText.removeTranslationAPIKey) {
-                    session.removeFunASRAPIKey()
-                    funASRAPIKey = ""
-                }
-                .disabled(!session.hasFunASRAPIKey)
-            } else {
-                Text("当前 Qwen / 千问 API key 同时用于 Fun-ASR 转写。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if session.translationProvider == .custom {
-                Text("Custom endpoint 只接受 HTTPS；本机 HTTP 仅可通过开发环境变量显式开启。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let endpoint = try? EndpointValidator.validate(
-                    session.customTranslationBaseURL,
-                    allowLoopbackHTTP: ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
-                ) {
-                    Text("实际请求地址：\(endpoint.origin)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .disabled(!session.hasFunASRAPIKey)
                 }
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -228,6 +210,7 @@ struct SidebarView: View {
             .buttonStyle(.bordered)
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

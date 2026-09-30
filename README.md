@@ -13,7 +13,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - Detect the spoken language locally from the returned transcript when auto detection is enabled.
 - Translate the full transcript with a short-video e-commerce prompt.
 - Always translate to Simplified Chinese; the spoken input language can be detected or selected manually.
-- Choose DeepSeek, OpenAI, Qwen, OpenRouter / Claude, Anthropic / Claude, or a custom OpenAI-compatible endpoint.
+- Choose Rootify, DeepSeek, or a custom Chat Completions-compatible endpoint.
 - Save original and Chinese translation text files locally.
 - Save a bilingual SRT timeline assembled from Fun-ASR word-level timestamps; the app groups speech by pauses, punctuation, and short-video-friendly duration, then shows time, original text, and Chinese translation in aligned columns.
 - When no speech is detected, optionally generate an explicitly labeled visual sales script after enabling separate cloud frame and visual-copy consent switches.
@@ -23,7 +23,7 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 - macOS 15 or newer.
 - Swift 6 toolchain.
 - `ffmpeg` available on `PATH`.
-- A Qwen / 千问 API key for Fun-ASR and an API key for the selected translation provider. When Qwen is selected for translation, the same key is used for both.
+- An Alibaba Cloud Southeast Asia API key for Fun-ASR and a separate API key for the selected translation provider.
 - The extracted speech audio is uploaded to Fun-ASR only after the separate audio-consent switch is enabled; frame uploads and no-speech visual copy remain separate opt-in switches.
 - Audio consent, cloud frame uploads, and no-speech visual copy are independent switches and default to off.
 - Custom endpoints must use HTTPS by default. Loopback HTTP is accepted only with `VIDLINGO_ALLOW_LOCAL_HTTP=1`.
@@ -33,12 +33,8 @@ The current workflow is offline-first and short-video oriented. It no longer cap
 VidLingo uses a shared Chat Completions-style request for these built-in providers:
 
 ```text
+Rootify        https://rootifyaiapi.rootifyglobal.com/v1/chat/completions  gpt-5.6-luna
 DeepSeek       https://api.deepseek.com/chat/completions        deepseek-v4-flash
-OpenAI         https://api.openai.com/v1/chat/completions       gpt-4o-mini
-Qwen / 千问     https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions  qwen3.6-plus
-Qwen-MT        same Qwen endpoint, model names like qwen-mt-flash or qwen-mt-plus
-OpenRouter / Claude  https://openrouter.ai/api/v1/chat/completions  anthropic/claude-sonnet-4.5
-Anthropic / Claude   https://api.anthropic.com/v1/messages             claude-sonnet-4-5
 Custom         user-provided HTTPS OpenAI-compatible chat completions URL
 ```
 
@@ -46,12 +42,11 @@ Custom endpoints must not contain query strings or fragments; put credentials in
 
 API keys are stored in macOS Keychain per provider. The previous DeepSeek key is still read as a migration fallback.
 
-When the selected Qwen model name starts with `qwen-mt-`, VidLingo uses Qwen-MT's required `translation_options` request shape instead of the normal chat prompt.
 
 Fun-ASR uses the workspace-specific native endpoint. Replace `<workspace-id>` with the ID from your deployment:
 
 ```text
-https://<workspace-id>.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+https://<workspace-id>.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
 fun-asr-flash-2026-06-15
 ```
 

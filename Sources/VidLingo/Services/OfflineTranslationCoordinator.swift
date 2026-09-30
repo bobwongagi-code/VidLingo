@@ -319,8 +319,7 @@ struct OfflineTranslationCoordinator {
     ) async throws -> String {
         var productContext = request.initialProductContext.trimmingCharacters(in: .whitespacesAndNewlines)
         guard request.shouldInferProductContext,
-              productContext.isEmpty,
-              !LLMTranslationService.isTranslationOnlyModel(provider: request.provider, modelName: request.modelName)
+              productContext.isEmpty
         else {
             return productContext
         }

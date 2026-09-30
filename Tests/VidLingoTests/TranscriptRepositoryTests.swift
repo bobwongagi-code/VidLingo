@@ -136,8 +136,8 @@ final class TranscriptRepositoryTests: XCTestCase {
             translatedText: "旧译文",
             sourceLanguage: sourceLanguage,
             targetLanguage: LanguageOption(id: "zh-CN", title: "Chinese Simplified", locale: Locale(identifier: "zh-CN")),
-            provider: .qwen,
-            modelName: "qwen3.6-plus",
+            provider: .rootify,
+            modelName: "gpt-5.6-luna",
             videoFileName: "sample.mp4",
             kind: .transcriptionTranslation,
             timedSegments: segments

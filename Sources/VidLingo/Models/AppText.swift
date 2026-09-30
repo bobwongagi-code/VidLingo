@@ -50,7 +50,7 @@ enum AppText {
 
     static let translationModelSettings = "翻译模型"
     static let translationProvider = "模型服务"
-    static let translationModelPlaceholder = "模型名，例如 gpt-4o-mini / qwen3.6-plus"
+    static let translationModelPlaceholder = "模型名，例如 gpt-5.6-luna"
     static let translationEndpointPlaceholder = "OpenAI-compatible chat completions URL"
     static let translationAPIKeyConfigured = "API key 已保存"
     static let translationAPIKeyNotConfigured = "未保存 API key"
@@ -60,6 +60,7 @@ enum AppText {
     static let translationAPIKeyInvalidStoredValue = "保存的 API key 无法读取。"
     static let translationModelMissing = "翻译模型名不能为空。"
     static let translationEndpointInvalid = "Custom endpoint 不是有效 URL。"
+    static let rootifyASRRoutingNotice = "翻译和画面识别使用 Rootify 公司服务；口播音频仍上传到原来的阿里云东南亚 Fun-ASR Flash，保留时间戳。两套 API key 分别保存。"
     static let translationInvalidResponse = "模型服务返回了无效响应。"
     static let noEffectiveSpeech = "未检测到有效口播"
     static let noEffectiveSpeechDescription = "这段视频可能没有可转写的人声，或 Fun-ASR 没有返回有效口播。请手动填写商品类型，或换有清晰口播的视频。"
@@ -70,7 +71,7 @@ enum AppText {
     static let funASRCloudNotice = "保存 API key 不等于授权上传；只有打开上面的开关才会发送音频。"
     static let cloudVideoFramesConsent = "允许上传视频截图做商品识别"
     static let visualSalesCopyConsent = "无口播时允许生成画面文案"
-    static let cloudConsentHelp = "Qwen / 千问 API key 保存在本机 Keychain；音频和视频截图分别受独立开关控制。"
+    static let cloudConsentHelp = "API key 保存在本机 Keychain；音频和视频截图分别受独立开关控制。"
     static let cloudAudioConsentRequired = "请先打开“允许上传口播音频到 Fun-ASR”，再开始处理。"
     static let executionPlanTitle = "本次处理计划"
     static let funASRSource = "Fun-ASR 云端转写结果。"
@@ -187,9 +188,9 @@ enum AppText {
     static func funASRKeyConfigurationWarning(_ availability: KeychainAvailability) -> String {
         switch availability {
         case .missing:
-            "使用 Fun-ASR 转写前，请先保存 Qwen / 千问 API key。"
+            "使用 Fun-ASR 转写前，请先保存 Fun-ASR API key。"
         default:
-            "Fun-ASR 的 Qwen API key：\(keychainAvailabilityText(availability))"
+            "Fun-ASR API key：\(keychainAvailabilityText(availability))"
         }
     }
 

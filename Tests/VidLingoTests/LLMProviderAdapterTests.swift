@@ -28,19 +28,11 @@ final class LLMProviderAdapterTests: XCTestCase {
         XCTAssertTrue(LLMTranslationError.visualResponseInvalid.allowsVisionFallback)
     }
 
-    func testChatRequestIncludesQwenThinkingPreference() throws {
-        let request = ChatCompletionRequest(
-            model: "qwen3.6-plus",
-            messages: [ChatMessage(role: "user", content: "翻译")],
-            stream: false,
-            temperature: 0.2,
-            maxTokens: 2_500,
-            translationOptions: nil,
-            enableThinking: false
-        )
-
-        let data = try JSONEncoder().encode(request)
-        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(payload["enable_thinking"] as? Bool, false)
+    func testChatRequestKeepsDefaultReasoning() throws {
+        let request = ChatCompletionRequest(model: "gpt-5.6-luna", messages: [ChatMessage(role: "user", content: "翻译")], stream: false, temperature: 0.2, maxTokens: 2500)
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertNil(payload["reasoning_effort"])
+        XCTAssertNil(payload["enable_thinking"])
+        XCTAssertNil(payload["translation_options"])
     }
 }

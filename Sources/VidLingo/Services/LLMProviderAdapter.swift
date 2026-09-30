@@ -4,22 +4,16 @@ import VidLingoCore
 struct LLMGenerationOptions: Sendable {
     let temperature: Double?
     let maxTokens: Int
-    let translationOptions: TranslationOptions?
     let maxFrameCount: Int
-    let enableThinking: Bool?
 
     init(
         temperature: Double?,
         maxTokens: Int,
-        translationOptions: TranslationOptions? = nil,
-        maxFrameCount: Int = 0,
-        enableThinking: Bool? = nil
+        maxFrameCount: Int = 0
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
-        self.translationOptions = translationOptions
         self.maxFrameCount = maxFrameCount
-        self.enableThinking = enableThinking
     }
 }
 
@@ -46,9 +40,7 @@ protocol LLMProviderAdapter: Sendable {
 
 enum LLMProviderAdapterFactory {
     static func make(for provider: TranslationProviderID) -> any LLMProviderAdapter {
-        provider.usesAnthropicMessagesAPI
-            ? AnthropicMessagesProviderAdapter()
-            : ChatCompletionsProviderAdapter()
+        ChatCompletionsProviderAdapter()
     }
 }
 
@@ -72,9 +64,7 @@ struct ChatCompletionsProviderAdapter: LLMProviderAdapter, Sendable {
             messages: messages,
             stream: false,
             temperature: options.temperature,
-            maxTokens: options.maxTokens,
-            translationOptions: options.translationOptions,
-            enableThinking: options.enableThinking
+            maxTokens: options.maxTokens
         )
         return try await LLMHTTPClient.sendChat(request: request, body: body, provider: provider)
     }
@@ -145,64 +135,12 @@ struct ChatCompletionsProviderAdapter: LLMProviderAdapter, Sendable {
             messages: messages,
             stream: false,
             temperature: options.temperature,
-            maxTokens: options.maxTokens,
-            enableThinking: options.enableThinking
+            maxTokens: options.maxTokens
         )
     }
 }
 
-struct AnthropicMessagesProviderAdapter: LLMProviderAdapter, Sendable {
-    func sendText(
-        request: URLRequest,
-        model: String,
-        system: String,
-        userText: String,
-        options: LLMGenerationOptions,
-        provider: TranslationProviderID
-    ) async throws -> String {
-        let body = AnthropicRequest(
-            model: model,
-            maxTokens: options.maxTokens,
-            system: system,
-            messages: [AnthropicMessage(role: "user", content: userText)]
-        )
-        return try await LLMHTTPClient.sendAnthropic(request: request, body: body, provider: provider)
-    }
-
-    func sendVision(
-        request: URLRequest,
-        model: String,
-        system: String,
-        userText: String,
-        frameJPEGData: [Data],
-        options: LLMGenerationOptions,
-        provider: TranslationProviderID
-    ) async throws -> String {
-        let images = frameJPEGData.prefix(options.maxFrameCount).map { data in
-            AnthropicVisionContent(
-                type: "image",
-                text: nil,
-                source: AnthropicImageSource(
-                    type: "base64",
-                    mediaType: "image/jpeg",
-                    data: data.base64EncodedString()
-                )
-            )
-        }
-        let body = AnthropicVisionRequest(
-            model: model,
-            maxTokens: options.maxTokens,
-            system: system,
-            messages: [AnthropicVisionMessage(
-                role: "user",
-                content: [AnthropicVisionContent(type: "text", text: userText, source: nil)] + images
-            )]
-        )
-        return try await LLMHTTPClient.sendAnthropic(request: request, body: body, provider: provider)
-    }
-}
-
-private enum LLMHTTPClient {
+enum LLMHTTPClient {
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 240
@@ -223,19 +161,6 @@ private enum LLMHTTPClient {
         } catch {
             throw LLMTranslationError.invalidResponse
         }
-    }
-
-    static func sendAnthropic<Body: Encodable>(
-        request: URLRequest,
-        body: Body,
-        provider: TranslationProviderID
-    ) async throws -> String {
-        let data = try await data(for: request, body: body, provider: provider)
-        let output = try JSONDecoder().decode(AnthropicResponse.self, from: data).text
-        guard !output.isEmpty else {
-            throw LLMTranslationError.emptyOutput(provider.title)
-        }
-        return output
     }
 
     private static func data<Body: Encodable>(
@@ -273,8 +198,6 @@ struct ChatCompletionRequest: Encodable, Sendable {
     let stream: Bool
     let temperature: Double?
     let maxTokens: Int?
-    let translationOptions: TranslationOptions?
-    let enableThinking: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case model
@@ -282,35 +205,7 @@ struct ChatCompletionRequest: Encodable, Sendable {
         case stream
         case temperature
         case maxTokens = "max_tokens"
-        case translationOptions = "translation_options"
-        case enableThinking = "enable_thinking"
     }
-}
-
-struct TranslationOptions: Encodable, Sendable {
-    let sourceLanguage: String
-    let targetLanguage: String
-    let terms: [TranslationTerm]?
-    let domains: String?
-    let translationMemory: [TranslationMemoryEntry]?
-
-    private enum CodingKeys: String, CodingKey {
-        case sourceLanguage = "source_lang"
-        case targetLanguage = "target_lang"
-        case terms
-        case domains
-        case translationMemory = "tm_list"
-    }
-}
-
-struct TranslationTerm: Encodable, Sendable {
-    let source: String
-    let target: String
-}
-
-struct TranslationMemoryEntry: Encodable, Sendable {
-    let source: String
-    let target: String
 }
 
 struct VisionChatCompletionRequest: Encodable, Sendable {
@@ -319,7 +214,6 @@ struct VisionChatCompletionRequest: Encodable, Sendable {
     let stream: Bool
     let temperature: Double?
     let maxTokens: Int?
-    let enableThinking: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case model
@@ -327,7 +221,6 @@ struct VisionChatCompletionRequest: Encodable, Sendable {
         case stream
         case temperature
         case maxTokens = "max_tokens"
-        case enableThinking = "enable_thinking"
     }
 }
 
@@ -350,76 +243,6 @@ struct VisionContent: Encodable, Sendable {
 
 struct VisionImageURL: Encodable, Sendable {
     let url: String
-}
-
-struct AnthropicRequest: Encodable, Sendable {
-    let model: String
-    let maxTokens: Int
-    let system: String
-    let messages: [AnthropicMessage]
-
-    private enum CodingKeys: String, CodingKey {
-        case model
-        case maxTokens = "max_tokens"
-        case system
-        case messages
-    }
-}
-
-struct AnthropicVisionRequest: Encodable, Sendable {
-    let model: String
-    let maxTokens: Int
-    let system: String
-    let messages: [AnthropicVisionMessage]
-
-    private enum CodingKeys: String, CodingKey {
-        case model
-        case maxTokens = "max_tokens"
-        case system
-        case messages
-    }
-}
-
-struct AnthropicVisionMessage: Encodable, Sendable {
-    let role: String
-    let content: [AnthropicVisionContent]
-}
-
-struct AnthropicVisionContent: Encodable, Sendable {
-    let type: String
-    let text: String?
-    let source: AnthropicImageSource?
-}
-
-struct AnthropicImageSource: Encodable, Sendable {
-    let type: String
-    let mediaType: String
-    let data: String
-
-    private enum CodingKeys: String, CodingKey {
-        case type
-        case mediaType = "media_type"
-        case data
-    }
-}
-
-struct AnthropicMessage: Encodable, Sendable {
-    let role: String
-    let content: String
-}
-
-struct AnthropicResponse: Decodable, Sendable {
-    let content: [AnthropicContentBlock]
-
-    var text: String {
-        content.compactMap(\.text).joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-struct AnthropicContentBlock: Decodable, Sendable {
-    let type: String?
-    let text: String?
 }
 
 struct ChatMessage: Codable, Sendable {

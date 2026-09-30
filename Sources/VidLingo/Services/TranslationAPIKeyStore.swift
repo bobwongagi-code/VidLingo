@@ -10,8 +10,12 @@ enum TranslationAPIKeyStore {
     }
 
     static func availability(for provider: TranslationProviderID) -> KeychainAvailability {
+        availability(service: provider.keychainService, legacyServices: provider.legacyKeychainServices)
+    }
+
+    static func availability(service: String, legacyServices: [String] = []) -> KeychainAvailability {
         do {
-            guard let key = try readAPIKey(for: provider), !key.isEmpty else {
+            guard let key = try readAPIKey(service: service, legacyServices: legacyServices), !key.isEmpty else {
                 return .missing
             }
             return .configured
@@ -23,7 +27,11 @@ enum TranslationAPIKeyStore {
     }
 
     static func readAPIKey(for provider: TranslationProviderID) throws -> String? {
-        for (service, account) in keychainLookups(for: provider) {
+        try readAPIKey(service: provider.keychainService, legacyServices: provider.legacyKeychainServices)
+    }
+
+    static func readAPIKey(service: String, legacyServices: [String] = []) throws -> String? {
+        for (service, account) in keychainLookups(service: service, legacyServices: legacyServices) {
             var query = baseQuery(service: service, account: account)
             query[kSecReturnData as String] = true
             query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -47,6 +55,10 @@ enum TranslationAPIKeyStore {
     }
 
     static func saveAPIKey(_ key: String, for provider: TranslationProviderID) throws {
+        try saveAPIKey(key, service: provider.keychainService, legacyServices: provider.legacyKeychainServices)
+    }
+
+    static func saveAPIKey(_ key: String, service: String, legacyServices: [String] = []) throws {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
             throw TranslationAPIKeyStoreError.emptyKey
@@ -55,7 +67,7 @@ enum TranslationAPIKeyStore {
             throw TranslationAPIKeyStoreError.invalidStoredKey
         }
 
-        let query = baseQuery(service: provider.keychainService, account: account)
+        let query = baseQuery(service: service, account: account)
         let updateStatus = SecItemUpdate(
             query as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
@@ -77,7 +89,11 @@ enum TranslationAPIKeyStore {
     }
 
     static func deleteAPIKey(for provider: TranslationProviderID) throws {
-        for (service, account) in keychainLookups(for: provider) {
+        try deleteAPIKey(service: provider.keychainService, legacyServices: provider.legacyKeychainServices)
+    }
+
+    static func deleteAPIKey(service: String, legacyServices: [String] = []) throws {
+        for (service, account) in keychainLookups(service: service, legacyServices: legacyServices) {
             let status = SecItemDelete(baseQuery(service: service, account: account) as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
                 throw TranslationAPIKeyStoreError.keychainStatus(status)
@@ -85,12 +101,12 @@ enum TranslationAPIKeyStore {
         }
     }
 
-    private static func keychainLookups(for provider: TranslationProviderID) -> [(service: String, account: String)] {
+    private static func keychainLookups(service: String, legacyServices: [String]) -> [(service: String, account: String)] {
         let currentLookups = [
-            (provider.keychainService, account),
-            (provider.keychainService, legacyAccount)
+            (service, account),
+            (service, legacyAccount)
         ]
-        let legacyLookups = provider.legacyKeychainServices.flatMap { service in
+        let legacyLookups = legacyServices.flatMap { service in
             [
                 (service, account),
                 (service, legacyAccount)

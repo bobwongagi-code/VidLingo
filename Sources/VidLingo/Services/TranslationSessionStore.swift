@@ -30,23 +30,31 @@ final class TranslationSessionStore {
     var isSourceAutoDetectionEnabled = true {
         didSet { persistSelectedSettings() }
     }
-    var translationProvider = TranslationProviderID.deepSeek {
+    var translationProvider = TranslationProviderID.rootify {
         didSet {
             guard !isRestoringSelectedSettings else { return }
             translationModelName = storedTranslationModelName(for: translationProvider)
-            translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: translationProvider)
+            refreshAPIKeyAvailabilities()
             persistSelectedSettings()
         }
     }
-    var translationModelName = TranslationProviderID.deepSeek.defaultModel {
+    var translationModelName = TranslationProviderID.rootify.defaultModel {
         didSet { persistTranslationModelName() }
     }
     var customTranslationBaseURL = "" {
         didSet { persistSelectedSettings() }
     }
-    var translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: .deepSeek)
+    private var translationAPIKeyState = APIKeyAvailabilityState()
+    var translationAPIKeyAvailability: KeychainAvailability {
+        get { translationAPIKeyState.value }
+        set { translationAPIKeyState.set(newValue) }
+    }
     var hasTranslationAPIKey: Bool { translationAPIKeyAvailability == .configured }
-    var funASRAPIKeyAvailability = TranslationAPIKeyStore.availability(for: .qwen)
+    private var funASRAPIKeyState = APIKeyAvailabilityState()
+    var funASRAPIKeyAvailability: KeychainAvailability {
+        get { funASRAPIKeyState.value }
+        set { funASRAPIKeyState.set(newValue) }
+    }
     var hasFunASRAPIKey: Bool { funASRAPIKeyAvailability == .configured }
     var allowsCloudAudioTranscription = false {
         didSet { persistSelectedSettings() }
@@ -130,6 +138,7 @@ final class TranslationSessionStore {
     init() {
         restoreSelectedSettings()
         loadSavedTranscripts()
+        refreshAPIKeyAvailabilities()
     }
 
     func selectOfflineVideo(_ videoURL: URL) {
@@ -293,9 +302,6 @@ final class TranslationSessionStore {
         do {
             try TranslationAPIKeyStore.saveAPIKey(key, for: translationProvider)
             translationAPIKeyAvailability = .configured
-            if translationProvider == .qwen {
-                funASRAPIKeyAvailability = .configured
-            }
             statusMessage = AppText.translationAPIKeySaved(translationProvider.title)
         } catch let error as TranslationAPIKeyStoreError {
             translationAPIKeyAvailability = error.availability
@@ -309,9 +315,6 @@ final class TranslationSessionStore {
         do {
             try TranslationAPIKeyStore.deleteAPIKey(for: translationProvider)
             translationAPIKeyAvailability = .missing
-            if translationProvider == .qwen {
-                funASRAPIKeyAvailability = .missing
-            }
             statusMessage = AppText.translationAPIKeyRemoved(translationProvider.title)
         } catch let error as TranslationAPIKeyStoreError {
             translationAPIKeyAvailability = error.availability
@@ -323,12 +326,9 @@ final class TranslationSessionStore {
 
     func saveFunASRAPIKey(_ key: String) {
         do {
-            try TranslationAPIKeyStore.saveAPIKey(key, for: .qwen)
+            try TranslationAPIKeyStore.saveAPIKey(key, service: FunASRConfiguration.keychainService)
             funASRAPIKeyAvailability = .configured
-            if translationProvider == .qwen {
-                translationAPIKeyAvailability = .configured
-            }
-            statusMessage = AppText.translationAPIKeySaved("Fun-ASR / Qwen")
+            statusMessage = AppText.translationAPIKeySaved("Fun-ASR")
         } catch let error as TranslationAPIKeyStoreError {
             funASRAPIKeyAvailability = error.availability
             statusMessage = error.localizedDescription
@@ -339,12 +339,9 @@ final class TranslationSessionStore {
 
     func removeFunASRAPIKey() {
         do {
-            try TranslationAPIKeyStore.deleteAPIKey(for: .qwen)
+            try TranslationAPIKeyStore.deleteAPIKey(service: FunASRConfiguration.keychainService)
             funASRAPIKeyAvailability = .missing
-            if translationProvider == .qwen {
-                translationAPIKeyAvailability = .missing
-            }
-            statusMessage = AppText.translationAPIKeyRemoved("Fun-ASR / Qwen")
+            statusMessage = AppText.translationAPIKeyRemoved("Fun-ASR")
         } catch let error as TranslationAPIKeyStoreError {
             funASRAPIKeyAvailability = error.availability
             statusMessage = error.localizedDescription
@@ -521,8 +518,23 @@ final class TranslationSessionStore {
             allowLoopbackHTTP: allowLocalHTTP
         ).url.absoluteString) ?? ""
         translationModelName = storedTranslationModelName(for: translationProvider)
-        translationAPIKeyAvailability = TranslationAPIKeyStore.availability(for: translationProvider)
-        funASRAPIKeyAvailability = TranslationAPIKeyStore.availability(for: .qwen)
+    }
+
+    private func refreshAPIKeyAvailabilities() {
+        let provider = translationProvider
+        let translationRevision = translationAPIKeyState.beginRefresh(reset: true)
+        let funASRRevision = funASRAPIKeyState.beginRefresh(reset: false)
+        Task { @MainActor [weak self] in
+            let availabilities = await Task.detached(priority: .utility) {
+                (
+                    TranslationAPIKeyStore.availability(for: provider),
+                    TranslationAPIKeyStore.availability(service: FunASRConfiguration.keychainService)
+                )
+            }.value
+            guard let self, self.translationProvider == provider else { return }
+            self.translationAPIKeyState.apply(availabilities.0, revision: translationRevision)
+            self.funASRAPIKeyState.apply(availabilities.1, revision: funASRRevision)
+        }
     }
 
     private func persistSelectedSettings() {
