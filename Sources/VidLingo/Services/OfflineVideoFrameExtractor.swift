@@ -7,7 +7,7 @@ enum OfflineVideoFrameExtractor {
         from videoURL: URL,
         token: ProcessCancellationToken
     ) async throws -> [Data] {
-        try await Task.detached(priority: .utility) {
+        let task: Task<[Data], Error> = Task.detached(priority: .utility) {
             try token.check()
             let asset = AVURLAsset(url: videoURL)
             let generatorBox = ImageGeneratorBox(AVAssetImageGenerator(asset: asset))
@@ -16,19 +16,16 @@ enum OfflineVideoFrameExtractor {
 
             let duration: Double
             do {
-                let loadedDuration = try await withTaskCancellationHandler {
-                    try await AsyncOperationTimeout.run(timeout: 15) {
-                        try await asset.load(.duration)
-                    }
-                } onCancel: {
-                    asset.cancelLoading()
+                let loadedDuration = try await AsyncOperationTimeout.run(
+                    timeout: 15,
+                    token: token,
+                    onCancel: { asset.cancelLoading() }
+                ) {
+                    try await asset.load(.duration)
                 }
                 duration = CMTimeGetSeconds(loadedDuration)
-            } catch ProcessSupervisorError.cancelled {
-                throw ProcessSupervisorError.cancelled
-            } catch ProcessSupervisorError.deadlineExceeded {
-                throw ProcessSupervisorError.deadlineExceeded
             } catch {
+                try Self.rethrowFatalFrameReadError(error)
                 return []
             }
             let seconds = frameTimes(forDuration: duration)
@@ -38,20 +35,36 @@ enum OfflineVideoFrameExtractor {
                 try token.check()
                 let time = CMTime(seconds: second, preferredTimescale: 600)
                 do {
-                    if let cgImage = try await cgImage(from: generatorBox, at: time),
+                    if let cgImage = try await cgImage(from: generatorBox, at: time, token: token),
                        let data = jpegData(from: cgImage) {
                         frames.append(data)
                     }
-                } catch ProcessSupervisorError.cancelled {
-                    throw ProcessSupervisorError.cancelled
-                } catch ProcessSupervisorError.deadlineExceeded {
-                    throw ProcessSupervisorError.deadlineExceeded
                 } catch {
+                    try Self.rethrowFatalFrameReadError(error)
                     // 单帧读取失败不阻断其他时间点，避免视觉增强拖垮主流程。
                 }
             }
             return frames
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            token.cancel()
+            task.cancel()
+        }
+    }
+
+    static func rethrowFatalFrameReadError(_ error: Error) throws {
+        if error is CancellationError {
+            throw ProcessSupervisorError.cancelled
+        }
+        guard let processError = error as? ProcessSupervisorError else { return }
+        switch processError {
+        case .processTimedOut:
+            return
+        case .cancelled, .deadlineExceeded:
+            throw processError
+        }
     }
 
     private static func frameTimes(forDuration duration: Double) -> [Double] {
@@ -75,15 +88,19 @@ enum OfflineVideoFrameExtractor {
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.72])
     }
 
-    private static func cgImage(from generatorBox: ImageGeneratorBox, at time: CMTime) async throws -> CGImage? {
-        try await withTaskCancellationHandler {
-            let result = try await AsyncOperationTimeout.run(timeout: 8) {
-                try await generatorBox.generator.image(at: time)
-            }
-            return result.image
-        } onCancel: {
-            generatorBox.generator.cancelAllCGImageGeneration()
+    private static func cgImage(
+        from generatorBox: ImageGeneratorBox,
+        at time: CMTime,
+        token: ProcessCancellationToken
+    ) async throws -> CGImage? {
+        let result = try await AsyncOperationTimeout.run(
+            timeout: 8,
+            token: token,
+            onCancel: { generatorBox.generator.cancelAllCGImageGeneration() }
+        ) {
+            try await generatorBox.generator.image(at: time)
         }
+        return result.image
     }
 
     private final class ImageGeneratorBox: @unchecked Sendable {

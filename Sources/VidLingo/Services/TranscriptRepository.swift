@@ -77,11 +77,12 @@ struct TranscriptRepository {
         )
     }
 
+    @discardableResult
     func saveEdits(
         for transcript: SavedTranscript,
         sourceText: String,
         translatedText: String
-    ) throws {
+    ) throws -> String {
         guard !transcript.isLegacy else {
             throw TranscriptRepositoryError.legacyReadOnly
         }
@@ -116,7 +117,7 @@ struct TranscriptRepository {
             frameDigest: oldManifest?.frameDigest,
             timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
         )
-        let published = try ArtifactPublisher.publish(
+        let publishedArtifact = try ArtifactPublisher.publish(
             sourceText: sourceText,
             translatedText: translatedText,
             manifest: manifest,
@@ -124,10 +125,11 @@ struct TranscriptRepository {
             timelineText: timedSegments.isEmpty ? nil : SRTTimelineCodec.encode(timedSegments),
             fileManager: fileManager
         )
+        let publishedRecordID = "\(TranscriptOrigin.current.rawValue):\(publishedArtifact.id)"
 
         do {
             if oldManifest != nil {
-                try fileManager.removeItem(at: transcript.sourceFileURL.deletingLastPathComponent())
+                try retireArtifactDirectory(at: transcript.sourceFileURL.deletingLastPathComponent())
             } else {
                 try FilePairTransaction.retire(
                     sourceURL: transcript.sourceFileURL,
@@ -136,13 +138,12 @@ struct TranscriptRepository {
                 )
             }
         } catch {
-            do {
-                try fileManager.removeItem(at: published.directoryURL)
-            } catch {
-                throw TranscriptRepositoryError.rollbackFailed(error.localizedDescription)
-            }
-            throw error
+            throw TranscriptRepositoryError.savedButRetirementFailed(
+                recordID: publishedRecordID,
+                message: error.localizedDescription
+            )
         }
+        return publishedRecordID
     }
 
     func delete(_ transcript: SavedTranscript) throws {
@@ -225,6 +226,14 @@ struct TranscriptRepository {
             .filter { $0.pathExtension == "txt" && $0.lastPathComponent.hasSuffix("_original.txt") }
             .compactMap { loadFlatTranscript(at: $0, origin: origin) }
         return artifactRecords + flatRecords
+    }
+
+    private func retireArtifactDirectory(at directoryURL: URL) throws {
+        let retiredDirectoryURL = directoryURL.deletingLastPathComponent()
+            .appendingPathComponent(".staging-retired-\(UUID().uuidString)", isDirectory: true)
+        // 新 artifact 已完整发布后，同目录改名隔离旧记录；过期暂存清理会回收残留目录。
+        try fileManager.moveItem(at: directoryURL, to: retiredDirectoryURL)
+        try fileManager.removeItem(at: retiredDirectoryURL)
     }
 
     private func loadArtifact(at directoryURL: URL, origin: TranscriptOrigin) -> SavedTranscript? {
@@ -323,7 +332,7 @@ struct TranscriptDeletionResult: Sendable, Equatable {
 enum TranscriptRepositoryError: LocalizedError, Equatable {
     case translationMissing
     case legacyReadOnly
-    case rollbackFailed(String)
+    case savedButRetirementFailed(recordID: String, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -331,8 +340,8 @@ enum TranscriptRepositoryError: LocalizedError, Equatable {
             AppText.translationMissing
         case .legacyReadOnly:
             AppText.legacyTranscriptReadOnly
-        case let .rollbackFailed(message):
-            "资料库保存失败，旧记录仍需人工检查：\(message)"
+        case let .savedButRetirementFailed(_, message):
+            "修改已保存，但旧记录清理失败：\(message)"
         }
     }
 }

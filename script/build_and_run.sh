@@ -18,6 +18,9 @@ APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
 ALLOW_ADHOC_SIGNING="${VIDLINGO_ALLOW_ADHOC_SIGNING:-1}"
+CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY#"${CODE_SIGN_IDENTITY%%[![:space:]]*}"}"
+CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY%"${CODE_SIGN_IDENTITY##*[![:space:]]}"}"
+STABLE_SIGNING_REQUIRED=0
 
 cd "$ROOT_DIR"
 
@@ -27,9 +30,8 @@ usage() {
 
 build_app() {
   local plist_mode="${1:-local}"
-  if [[ -z "$CODE_SIGN_IDENTITY" && "$ALLOW_ADHOC_SIGNING" != "1" ]]; then
-    echo "A stable CODE_SIGN_IDENTITY is required. Set CODE_SIGN_IDENTITY or explicitly set VIDLINGO_ALLOW_ADHOC_SIGNING=1 for local development." >&2
-    return 1
+  if [[ "$ALLOW_ADHOC_SIGNING" != "1" || ( -n "$CODE_SIGN_IDENTITY" && "$CODE_SIGN_IDENTITY" != "-" ) ]]; then
+    require_stable_signing
   fi
   swift build
   local build_binary
@@ -50,13 +52,14 @@ build_app() {
     /usr/bin/codesign --force --deep --timestamp=none --sign - "$APP_BUNDLE"
     echo "warning: no CODE_SIGN_IDENTITY supplied; using ad-hoc signing. Set CODE_SIGN_IDENTITY for stable Keychain/privacy grants." >&2
   fi
+
+  if [[ "$STABLE_SIGNING_REQUIRED" == "1" ]]; then
+    verify_stable_signature
+  fi
 }
 
 package_app() {
-  if [[ -z "$CODE_SIGN_IDENTITY" ]]; then
-    echo "package requires a stable CODE_SIGN_IDENTITY; use build/dev-run for local development." >&2
-    return 1
-  fi
+  require_stable_signing
   build_app release
   local package_path="$DIST_DIR/${APP_NAME}-${VERSION}.zip"
   rm -f "$package_path"
@@ -71,8 +74,22 @@ install_app() {
 }
 
 require_stable_signing() {
-  if [[ -z "$CODE_SIGN_IDENTITY" ]]; then
-    echo "A stable CODE_SIGN_IDENTITY is required for install/run/package/verify. Use 'dev-run' only for explicit ad-hoc development runs." >&2
+  if [[ -z "$CODE_SIGN_IDENTITY" || "$CODE_SIGN_IDENTITY" == "-" ]]; then
+    echo "A non-ad-hoc CODE_SIGN_IDENTITY is required for install/run/package/verify. Use 'build' or 'dev-run' for local ad-hoc signing." >&2
+    return 1
+  fi
+  STABLE_SIGNING_REQUIRED=1
+}
+
+verify_stable_signature() {
+  local signature_details
+  if ! signature_details="$(/usr/bin/codesign --display --verbose=4 "$APP_BUNDLE" 2>&1)"; then
+    echo "Unable to inspect the built app's codesign identity." >&2
+    return 1
+  fi
+  if grep -Fq "Signature=adhoc" <<<"$signature_details" \
+    || ! grep -Eq '^Authority=.+$' <<<"$signature_details"; then
+    echo "Stable signing requires a non-ad-hoc codesign identity on the built app." >&2
     return 1
   fi
 }
@@ -151,10 +168,7 @@ case "$MODE" in
     /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
     ;;
   verify|--verify)
-    if [[ -z "$CODE_SIGN_IDENTITY" ]]; then
-      echo "verify requires a stable CODE_SIGN_IDENTITY; ad-hoc signing is only for local development." >&2
-      exit 1
-    fi
+    require_stable_signing
     build_app
     verify_app
     ;;

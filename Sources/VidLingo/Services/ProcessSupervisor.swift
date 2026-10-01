@@ -5,6 +5,7 @@ import Dispatch
 final class ProcessCancellationToken: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var cancellationHandlers = [UUID: @Sendable () -> Void]()
     private let deadline: Date
 
     init(timeout: TimeInterval) {
@@ -13,7 +14,34 @@ final class ProcessCancellationToken: @unchecked Sendable {
 
     func cancel() {
         lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            return
+        }
         cancelled = true
+        let handlers = Array(cancellationHandlers.values)
+        cancellationHandlers.removeAll()
+        lock.unlock()
+        handlers.forEach { $0() }
+    }
+
+    @discardableResult
+    func addCancellationHandler(_ handler: @escaping @Sendable () -> Void) -> UUID? {
+        lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            handler()
+            return nil
+        }
+        let id = UUID()
+        cancellationHandlers[id] = handler
+        lock.unlock()
+        return id
+    }
+
+    func removeCancellationHandler(_ id: UUID) {
+        lock.lock()
+        cancellationHandlers.removeValue(forKey: id)
         lock.unlock()
     }
 
@@ -51,22 +79,156 @@ enum ProcessSupervisorError: LocalizedError, Equatable {
 enum AsyncOperationTimeout {
     static func run<T: Sendable>(
         timeout: TimeInterval,
+        token: ProcessCancellationToken? = nil,
+        onCancel: @escaping @Sendable () -> Void = {},
+        onLateCompletion: @escaping @Sendable (T) -> Void = { _ in },
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(max(timeout, 0.001) * 1_000_000_000))
-                throw ProcessSupervisorError.processTimedOut
-            }
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else {
-                throw ProcessSupervisorError.processTimedOut
-            }
-            return result
+        let race = AsyncOperationRace(onCancel: onCancel, onLateCompletion: onLateCompletion)
+        let cancellationHandlerID = token?.addCancellationHandler {
+            race.fail(ProcessSupervisorError.cancelled)
         }
+        defer {
+            if let cancellationHandlerID {
+                token?.removeCancellationHandler(cancellationHandlerID)
+            }
+        }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                race.installContinuation(continuation)
+                guard race.isPending else { return }
+
+                let operationTask = Task.detached(priority: .utility) {
+                    guard !Task.isCancelled else {
+                        race.finishOperation(.failure(CancellationError()))
+                        return
+                    }
+                    do {
+                        race.finishOperation(.success(try await operation()))
+                    } catch {
+                        race.finishOperation(.failure(error))
+                    }
+                }
+                race.installOperationTask(operationTask)
+                guard race.isPending else { return }
+
+                let timeoutTask = Task.detached(priority: .utility) {
+                    do {
+                        try await Task.sleep(for: .seconds(max(timeout, 0.001)))
+                        race.fail(ProcessSupervisorError.processTimedOut)
+                    } catch {
+                        // 另一个结果先完成时，取消计时任务即可。
+                    }
+                }
+                race.installTimeoutTask(timeoutTask)
+            }
+        } onCancel: {
+            race.fail(ProcessSupervisorError.cancelled)
+        }
+    }
+}
+
+private final class AsyncOperationRace<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let onCancel: @Sendable () -> Void
+    private let onLateCompletion: @Sendable (T) -> Void
+    private var result: Result<T, Error>?
+    private var continuation: CheckedContinuation<T, Error>?
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+
+    init(
+        onCancel: @escaping @Sendable () -> Void,
+        onLateCompletion: @escaping @Sendable (T) -> Void
+    ) {
+        self.onCancel = onCancel
+        self.onLateCompletion = onLateCompletion
+    }
+
+    var isPending: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return result == nil
+    }
+
+    func installContinuation(_ continuation: CheckedContinuation<T, Error>) {
+        lock.lock()
+        let completedResult = result
+        if completedResult == nil {
+            self.continuation = continuation
+        }
+        lock.unlock()
+        if let completedResult {
+            continuation.resume(with: completedResult)
+        }
+    }
+
+    func installOperationTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        let shouldCancel = result != nil
+        if !shouldCancel {
+            operationTask = task
+        }
+        lock.unlock()
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func installTimeoutTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        let shouldCancel = result != nil
+        if !shouldCancel {
+            timeoutTask = task
+        }
+        lock.unlock()
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func finishOperation(_ result: Result<T, Error>) {
+        lock.lock()
+        guard self.result == nil else {
+            lock.unlock()
+            if case let .success(value) = result {
+                onLateCompletion(value)
+            }
+            return
+        }
+        self.result = result
+        let continuation = self.continuation
+        self.continuation = nil
+        let timeoutTask = self.timeoutTask
+        self.timeoutTask = nil
+        operationTask = nil
+        lock.unlock()
+
+        timeoutTask?.cancel()
+        continuation?.resume(with: result)
+    }
+
+    func fail(_ error: Error) {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        let failure = Result<T, Error>.failure(error)
+        result = failure
+        let continuation = self.continuation
+        self.continuation = nil
+        let operationTask = self.operationTask
+        self.operationTask = nil
+        let timeoutTask = self.timeoutTask
+        self.timeoutTask = nil
+        lock.unlock()
+
+        onCancel()
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        continuation?.resume(with: failure)
     }
 }
 

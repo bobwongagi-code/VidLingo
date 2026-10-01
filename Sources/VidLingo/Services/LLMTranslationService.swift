@@ -206,31 +206,7 @@ actor LLMTranslationService {
         )
         try token.check()
 
-        do {
-            let translations = try Self.parseTimedTranslations(from: output)
-            guard Set(translations.map(\.id)).count == translations.count else {
-                throw TimedTranslationParsingError.invalidOutput
-            }
-            let translationsByID = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.translation) })
-            guard translationsByID.count == timedSegments.count,
-                  Set(translationsByID.keys) == Set(timedSegments.map(\.id)) else {
-                throw TimedTranslationParsingError.invalidOutput
-            }
-            let segments = timedSegments.map { segment in
-                var translatedSegment = segment
-                translatedSegment.translatedText = translationsByID[segment.id]
-                return translatedSegment
-            }
-            guard segments.allSatisfy(\.hasTranslation) else {
-                throw TimedTranslationParsingError.invalidOutput
-            }
-            return TimedTranscriptTranslation(
-                text: segments.compactMap(\.translatedText).joined(separator: "\n"),
-                segments: segments
-            )
-        } catch TimedTranslationParsingError.invalidOutput {
-            return unalignedTranslation(from: output)
-        }
+        return try Self.alignTimedTranslations(from: output, to: timedSegments)
     }
 
     static func supportsTimedTranslation(provider: TranslationProviderID, modelName: String) -> Bool {
@@ -259,14 +235,6 @@ actor LLMTranslationService {
             token: token
         )
         return TimedTranscriptTranslation(text: translatedText, segments: [])
-    }
-
-    private func unalignedTranslation(from output: String) -> TimedTranscriptTranslation {
-        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return TimedTranscriptTranslation(
-            text: text.isEmpty ? "模型没有返回可对齐的译文。" : text,
-            segments: []
-        )
     }
 
     func generateVisualSalesCopy(
@@ -430,6 +398,33 @@ actor LLMTranslationService {
             throw TimedTranslationParsingError.invalidOutput
         }
         return items
+    }
+
+    static func alignTimedTranslations(
+        from output: String,
+        to timedSegments: [TimedTranscriptSegment]
+    ) throws -> TimedTranscriptTranslation {
+        let translations = try parseTimedTranslations(from: output)
+        guard Set(translations.map(\.id)).count == translations.count else {
+            throw TimedTranslationParsingError.invalidOutput
+        }
+        let translationsByID = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.translation) })
+        guard translationsByID.count == timedSegments.count,
+              Set(translationsByID.keys) == Set(timedSegments.map(\.id)) else {
+            throw TimedTranslationParsingError.invalidOutput
+        }
+        let segments = timedSegments.map { segment in
+            var translatedSegment = segment
+            translatedSegment.translatedText = translationsByID[segment.id]
+            return translatedSegment
+        }
+        guard segments.allSatisfy(\.hasTranslation) else {
+            throw TimedTranslationParsingError.invalidOutput
+        }
+        return TimedTranscriptTranslation(
+            text: segments.compactMap(\.translatedText).joined(separator: "\n"),
+            segments: segments
+        )
     }
 
     private func productContextPrompt(_ text: String, fileName: String, source: LanguageOption) -> String {
@@ -703,6 +698,10 @@ struct TimedTranslationItem: Decodable, Equatable, Sendable {
     let translation: String
 }
 
-private enum TimedTranslationParsingError: Error {
+private enum TimedTranslationParsingError: LocalizedError {
     case invalidOutput
+
+    var errorDescription: String? {
+        "模型返回的分段译文不完整或格式无效，请重试。"
+    }
 }

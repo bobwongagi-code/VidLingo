@@ -43,4 +43,16 @@ final class LanguageTextDetectorTests: XCTestCase {
 
         XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "en-US")
     }
+
+    func testDetectsShortPureHanTextAsChinese() {
+        XCTAssertEqual(LanguageTextDetector.detect("好用")?.id, "zh-CN")
+    }
+
+    func testDetectsJapaneseWhenKanaDisambiguatesHanCharacters() {
+        XCTAssertEqual(LanguageTextDetector.detect("日本語を話す")?.id, "ja-JP")
+    }
+
+    func testDetectsChineseWithLatinProductName() {
+        XCTAssertEqual(LanguageTextDetector.detect("这个USB背包很实用")?.id, "zh-CN")
+    }
 }

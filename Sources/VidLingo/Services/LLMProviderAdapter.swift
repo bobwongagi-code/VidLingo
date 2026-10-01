@@ -158,6 +158,8 @@ enum LLMHTTPClient {
             return try LLMResponseParser.outputText(from: data)
         } catch LLMResponseParserError.emptyOutput {
             throw LLMTranslationError.emptyOutput(provider.title)
+        } catch LLMResponseParserError.incompleteOutput {
+            throw LLMTranslationError.incompleteResponse(provider.title)
         } catch {
             throw LLMTranslationError.invalidResponse
         }
@@ -264,6 +266,7 @@ enum LLMTranslationError: LocalizedError {
     case invalidEndpoint
     case invalidResponse
     case emptyOutput(String)
+    case incompleteResponse(String)
     case requestTimedOut(provider: String)
     case requestFailed(provider: String, statusCode: Int, message: String?)
     case visualFramesMissing
@@ -298,6 +301,8 @@ enum LLMTranslationError: LocalizedError {
             AppText.translationInvalidResponse
         case let .emptyOutput(provider):
             AppText.translationEmptyOutput(provider)
+        case let .incompleteResponse(provider):
+            "\(provider) 返回的结果不完整或已被截断，可能受长度限制或内容过滤影响，请调整后重试。"
         case let .requestTimedOut(provider):
             AppText.translationRequestTimedOut(provider)
         case let .requestFailed(provider, statusCode, message):

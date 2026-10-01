@@ -3,15 +3,26 @@ import Foundation
 enum OfflineVideoAudioExtractor {
     static func extractSpeechAudio(
         from videoURL: URL,
+        videoDuration: Double,
         token: ProcessCancellationToken
     ) async throws -> URL {
-        try await Task.detached(priority: .utility) {
-            try extractSpeechAudioSynchronously(from: videoURL, token: token)
-        }.value
+        try await AsyncOperationTimeout.run(
+            timeout: MediaProcessingLimits.totalTaskTimeout,
+            token: token,
+            onCancel: { token.cancel() },
+            onLateCompletion: { removeTemporaryAudio($0) }
+        ) {
+            try extractSpeechAudioSynchronously(
+                from: videoURL,
+                videoDuration: videoDuration,
+                token: token
+            )
+        }
     }
 
     private static func extractSpeechAudioSynchronously(
         from videoURL: URL,
+        videoDuration: Double,
         token: ProcessCancellationToken
     ) throws -> URL {
         try token.check()
@@ -29,7 +40,11 @@ enum OfflineVideoAudioExtractor {
             }
         }
 
-        let audioURL = directory.appendingPathComponent("speech.wav")
+        let audioURL = directory.appendingPathComponent("speech.mp3")
+        let durationSampleCount = max(0, Int((videoDuration * 16_000).rounded(.down)))
+        let durationLimitFilter = "aresample=16000,atrim=end_sample=\(durationSampleCount)"
+        // 按视频呈现时长裁掉 AAC 解码填充；样本数修剪不会因时间戳或编码延迟吞掉尾音。
+        // Fun-ASR 的 Base64 上传上限为 10 MB；128 kbps 单声道 MP3 可覆盖五分钟并留出编码空间。
         let enhancedArguments = [
             "-hide_banner",
             "-loglevel", "error",
@@ -38,10 +53,11 @@ enum OfflineVideoAudioExtractor {
             "-vn",
             // 高低通 + 响度标准化让人声更稳定；不加 afftdn 激进降噪，它会吃掉人声反而更糟。
             // 不补开头静音：实测 adelay 会让泰语首段冒出词间空格，而开头漂移已由中性 initial prompt 解决。
-            "-af", "highpass=f=80,lowpass=f=8000,loudnorm=I=-16:TP=-1.5:LRA=11",
+            "-af", "highpass=f=80,lowpass=f=8000,loudnorm=I=-16:TP=-1.5:LRA=11,\(durationLimitFilter)",
             "-ar", "16000",
             "-ac", "1",
-            "-sample_fmt", "s16",
+            "-codec:a", "libmp3lame",
+            "-b:a", "128k",
             audioURL.path(percentEncoded: false)
         ]
         if try runFFmpeg(ffmpegURL, arguments: enhancedArguments, directory: directory, logName: "ffmpeg-enhanced.log", token: token) {
@@ -56,9 +72,11 @@ enum OfflineVideoAudioExtractor {
             "-y",
             "-i", videoURL.path(percentEncoded: false),
             "-vn",
+            "-af", durationLimitFilter,
             "-ar", "16000",
             "-ac", "1",
-            "-sample_fmt", "s16",
+            "-codec:a", "libmp3lame",
+            "-b:a", "128k",
             audioURL.path(percentEncoded: false)
         ]
         if try runFFmpeg(ffmpegURL, arguments: plainArguments, directory: directory, logName: "ffmpeg-plain.log", token: token) {

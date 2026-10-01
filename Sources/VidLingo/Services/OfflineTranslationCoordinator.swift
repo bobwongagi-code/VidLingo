@@ -73,7 +73,11 @@ struct OfflineTranslationCoordinator {
             recordStage("mediaPreflight", startedAt: preflightStartedAt)
 
             let audioStartedAt = Date()
-            audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(from: request.videoURL, token: token)
+            audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(
+                from: request.videoURL,
+                videoDuration: videoDuration,
+                token: token
+            )
             guard let audioURL else {
                 throw OfflineVideoTranslationError.audioExtractionFailed("Audio extraction returned no file.")
             }
@@ -189,12 +193,11 @@ struct OfflineTranslationCoordinator {
 
     static func formattedVideoDuration(for videoURL: URL) async -> String {
         let asset = AVURLAsset(url: videoURL)
-        let duration = try? await withTaskCancellationHandler {
-            try await AsyncOperationTimeout.run(timeout: 15) {
-                try await asset.load(.duration)
-            }
-        } onCancel: {
-            asset.cancelLoading()
+        let duration = try? await AsyncOperationTimeout.run(
+            timeout: 15,
+            onCancel: { asset.cancelLoading() }
+        ) {
+            try await asset.load(.duration)
         }
         let seconds = duration.map(CMTimeGetSeconds) ?? 0
         guard seconds.isFinite, seconds > 0 else { return "" }
@@ -360,14 +363,22 @@ struct OfflineTranslationCoordinator {
             throw OfflineVideoTranslationError.videoTooLarge
         }
         let asset = AVURLAsset(url: videoURL)
-        let duration = try? await withTaskCancellationHandler {
-            try await AsyncOperationTimeout.run(timeout: 15) {
+        let duration: CMTime
+        do {
+            duration = try await AsyncOperationTimeout.run(
+                timeout: 15,
+                token: token,
+                onCancel: { asset.cancelLoading() }
+            ) {
                 try await asset.load(.duration)
             }
-        } onCancel: {
-            asset.cancelLoading()
+        } catch let error as ProcessSupervisorError {
+            throw error
+        } catch is CancellationError {
+            throw ProcessSupervisorError.cancelled
+        } catch {
+            throw OfflineVideoTranslationError.invalidVideo
         }
-        guard let duration else { throw OfflineVideoTranslationError.invalidVideo }
         let seconds = CMTimeGetSeconds(duration)
         guard seconds.isFinite, seconds > 0 else { throw OfflineVideoTranslationError.invalidVideo }
         guard seconds <= MediaProcessingLimits.maxVideoDurationSeconds else {

@@ -227,7 +227,7 @@ struct FunASRTranscriber {
                 type: "input_audio",
                 text: nil,
                 inputAudio: FunASRInputAudio(
-                    data: "data:audio/wav;base64,\(audioData.base64EncodedString())"
+                    data: "data:audio/mp3;base64,\(audioData.base64EncodedString())"
                 )
             )]
         ))
@@ -236,7 +236,7 @@ struct FunASRTranscriber {
             model: modelName,
             input: FunASRInput(messages: messages),
             parameters: FunASRParameters(
-                format: "wav",
+                format: "mp3",
                 sampleRate: 16_000,
                 languageHints: languageHint.map { [$0] }
             )

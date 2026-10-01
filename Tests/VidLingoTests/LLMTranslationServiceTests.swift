@@ -53,4 +53,61 @@ final class LLMTranslationServiceTests: XCTestCase {
         ])
     }
 
+    func testAlignsTimedTranslationsByIDAndPreservesSourceOrder() throws {
+        let segments = makeTimedSegments()
+        let output = #"{"segments":[{"id":2,"translation":"第二句"},{"id":1,"translation":"第一句"}]}"#
+
+        let translation = try LLMTranslationService.alignTimedTranslations(from: output, to: segments)
+
+        XCTAssertEqual(translation.text, "第一句\n第二句")
+        XCTAssertEqual(translation.segments.map(\.translatedText), ["第一句", "第二句"])
+        XCTAssertEqual(translation.segments.map(\.startMilliseconds), [0, 1_000])
+    }
+
+    func testRejectsMalformedTimedTranslationJSON() {
+        assertInvalidTimedTranslation(#"{"segments":"#)
+    }
+
+    func testRejectsMissingTimedTranslationSegment() {
+        assertInvalidTimedTranslation(#"{"segments":[{"id":1,"translation":"第一句"}]}"#)
+    }
+
+    func testRejectsUnexpectedTimedTranslationID() {
+        assertInvalidTimedTranslation(#"{"segments":[{"id":1,"translation":"第一句"},{"id":2,"translation":"第二句"},{"id":3,"translation":"额外句"}]}"#)
+    }
+
+    func testRejectsDuplicateTimedTranslationID() {
+        assertInvalidTimedTranslation(#"{"segments":[{"id":1,"translation":"第一句"},{"id":1,"translation":"重复"}]}"#)
+    }
+
+    func testRejectsEmptyTimedTranslation() {
+        assertInvalidTimedTranslation(#"{"segments":[{"id":1,"translation":" "},{"id":2,"translation":"第二句"}]}"#)
+    }
+
+    private func assertInvalidTimedTranslation(
+        _ output: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(
+            try LLMTranslationService.alignTimedTranslations(from: output, to: makeTimedSegments()),
+            file: file,
+            line: line
+        ) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                "模型返回的分段译文不完整或格式无效，请重试。",
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func makeTimedSegments() -> [TimedTranscriptSegment] {
+        [
+            TimedTranscriptSegment(id: 1, startMilliseconds: 0, endMilliseconds: 1_000, sourceText: "First"),
+            TimedTranscriptSegment(id: 2, startMilliseconds: 1_000, endMilliseconds: 2_000, sourceText: "Second")
+        ]
+    }
+
 }

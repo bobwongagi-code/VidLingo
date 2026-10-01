@@ -133,12 +133,18 @@ final class TranslationSessionStore {
     private var isRestoringSelectedSettings = false
     private var processingTask: Task<Void, Never>?
     private var processingToken: ProcessCancellationToken?
-    private let transcriptRepository = TranscriptRepository()
+    private let transcriptRepository: TranscriptRepository
 
     init() {
+        transcriptRepository = TranscriptRepository()
         restoreSelectedSettings()
         loadSavedTranscripts()
         refreshAPIKeyAvailabilities()
+    }
+
+    init(transcriptRepository: TranscriptRepository) {
+        self.transcriptRepository = transcriptRepository
+        loadSavedTranscripts()
     }
 
     func selectOfflineVideo(_ videoURL: URL) {
@@ -372,9 +378,16 @@ final class TranslationSessionStore {
     }
 
     @discardableResult
-    func loadSavedTranscripts() -> Bool {
+    func loadSavedTranscripts(selecting transcriptID: String? = nil) -> Bool {
+        if let transcriptID {
+            selectedSavedTranscriptID = transcriptID
+        }
         do {
             try reloadSavedTranscripts()
+            if let transcriptID,
+               savedTranscripts.contains(where: { $0.id == transcriptID }) {
+                selectSavedTranscript(transcriptID)
+            }
             return true
         } catch {
             statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
@@ -400,17 +413,25 @@ final class TranslationSessionStore {
             statusMessage = AppText.legacyTranscriptReadOnly
             return
         }
+        var publishedRecordID: String?
         do {
-            try transcriptRepository.saveEdits(
+            publishedRecordID = try transcriptRepository.saveEdits(
                 for: selectedTranscript,
                 sourceText: savedDraftSourceText,
                 translatedText: savedDraftTranslationText
             )
             statusMessage = AppText.savedEdits
+        } catch let error as TranscriptRepositoryError {
+            if case let .savedButRetirementFailed(recordID, _) = error {
+                publishedRecordID = recordID
+                statusMessage = error.localizedDescription
+            } else {
+                statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
+            }
         } catch {
             statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
         }
-        _ = loadSavedTranscripts()
+        _ = loadSavedTranscripts(selecting: publishedRecordID)
     }
 
     func deleteSelectedTranscript() {

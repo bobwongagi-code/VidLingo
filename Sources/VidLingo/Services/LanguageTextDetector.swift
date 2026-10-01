@@ -2,6 +2,13 @@ import Foundation
 
 enum LanguageTextDetector {
     static func detect(_ text: String) -> LanguageOption? {
+        let letters = text.lowercased().unicodeScalars
+            .filter { CharacterSet.letters.contains($0) }
+        guard !letters.isEmpty else { return nil }
+        if letters.allSatisfy(isHan) {
+            return LanguageOption.supported.first { $0.id == "zh-CN" }
+        }
+
         let ranked = LanguageOption.supported
             .map { language in
                 (language: language, score: score(transcript: text, language: language))
@@ -19,7 +26,6 @@ enum LanguageTextDetector {
     private static func score(transcript: String, language: LanguageOption) -> Double {
         let normalizedText = transcript.lowercased()
         let scalars = Array(normalizedText.unicodeScalars)
-        guard scalars.count >= 4 else { return 0 }
         let letters = scalars.filter { CharacterSet.letters.contains($0) }
         guard !letters.isEmpty else { return 0 }
 
@@ -33,10 +39,8 @@ enum LanguageTextDetector {
         case "zh-CN":
             score = ratio { (0x4E00...0x9FFF).contains(Int($0.value)) }
         case "ja-JP":
-            score = ratio {
-                (0x3040...0x30FF).contains(Int($0.value))
-                    || (0x4E00...0x9FFF).contains(Int($0.value))
-            }
+            let containsKana = letters.contains(where: isJapaneseKana)
+            score = containsKana ? ratio { isJapaneseKana($0) || isHan($0) } : 0
         case "ko-KR":
             score = ratio { (0xAC00...0xD7AF).contains(Int($0.value)) }
         default:
@@ -80,5 +84,13 @@ enum LanguageTextDetector {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return max(0, lines.count - Set(lines).count)
+    }
+
+    private static func isHan(_ scalar: UnicodeScalar) -> Bool {
+        (0x4E00...0x9FFF).contains(Int(scalar.value))
+    }
+
+    private static func isJapaneseKana(_ scalar: UnicodeScalar) -> Bool {
+        (0x3040...0x30FF).contains(Int(scalar.value))
     }
 }

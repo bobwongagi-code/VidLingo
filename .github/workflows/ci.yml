@@ -13,13 +13,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
       - name: Check shell script and diff contracts
-        run: bash -n script/build_and_run.sh && git diff --check
+        run: bash -n script/build_and_run.sh script/test_build_signing.sh && git diff --check
+      - name: Test stable signing gates in isolation
+        run: bash script/test_build_signing.sh
       - name: Build the app target
         run: swift build
       - name: Run Swift tests
         run: swift test
       - name: Build the application bundle
-        run: ./script/build_and_run.sh build
+        run: VIDLINGO_ALLOW_ADHOC_SIGNING=1 ./script/build_and_run.sh build
       - name: Verify the application signature
         run: /usr/bin/codesign --verify --deep --strict dist/VidLingo.app
       - name: Ensure installation requires stable signing

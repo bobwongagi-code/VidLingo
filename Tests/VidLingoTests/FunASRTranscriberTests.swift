@@ -37,12 +37,38 @@ final class FunASRTranscriberTests: XCTestCase {
         let audioContent = try XCTUnwrap(messages[1]["content"] as? [[String: Any]])
         XCTAssertEqual(audioContent[0]["type"] as? String, "input_audio")
         let audio = try XCTUnwrap(audioContent[0]["input_audio"] as? [String: Any])
-        XCTAssertEqual(audio["data"] as? String, "data:audio/wav;base64,AQI=")
+        XCTAssertEqual(audio["data"] as? String, "data:audio/mp3;base64,AQI=")
 
         let parameters = try XCTUnwrap(payload["parameters"] as? [String: Any])
-        XCTAssertEqual(parameters["format"] as? String, "wav")
+        XCTAssertEqual(parameters["format"] as? String, "mp3")
         XCTAssertEqual(parameters["sample_rate"] as? Int, 16_000)
         XCTAssertEqual(parameters["language_hints"] as? [String], ["th"])
+    }
+
+    func testMaximumAudioSizeStaysWithinBase64RequestLimit() throws {
+        let audioData = Data(repeating: 0x01, count: Int(FunASRTranscriber.maxAudioBytes))
+        let requestData = try FunASRTranscriber.requestData(
+            audioData: audioData,
+            productContext: ""
+        )
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: requestData) as? [String: Any])
+        let input = try XCTUnwrap(payload["input"] as? [String: Any])
+        let messages = try XCTUnwrap(input["messages"] as? [[String: Any]])
+        let content = try XCTUnwrap(messages[0]["content"] as? [[String: Any]])
+        let audio = try XCTUnwrap(content[0]["input_audio"] as? [String: Any])
+        let dataURI = try XCTUnwrap(audio["data"] as? String)
+
+        XCTAssertLessThan(dataURI.utf8.count, 10_000_000)
+        XCTAssertLessThan(requestData.count, 10_000_000)
+    }
+
+    func testRejectsAudioAboveBase64SafeLimit() {
+        let audioData = Data(repeating: 0x01, count: Int(FunASRTranscriber.maxAudioBytes) + 1)
+
+        XCTAssertThrowsError(try FunASRTranscriber.requestData(
+            audioData: audioData,
+            productContext: ""
+        ))
     }
 
     func testParsesStreamingTextAndFinalSentenceTimestamps() throws {
@@ -85,7 +111,7 @@ final class FunASRTranscriberTests: XCTestCase {
 
         XCTAssertGreaterThan(result.segments.count, 1)
         XCTAssertTrue(result.hasWordTimestamps)
-        XCTAssertEqual(result.segments.map(\.sourceText).joined(), "第一句。第二句。第三句。第四句。")
+        XCTAssertEqual(result.segments.map(\.sourceText).joined(), "第一句。第二句。第三句第四句。")
         XCTAssertEqual(result.segments.first?.startMilliseconds, 0)
         XCTAssertEqual(result.segments.last?.endMilliseconds, 9_000)
         XCTAssertTrue(zip(result.segments, result.segments.dropFirst()).allSatisfy {

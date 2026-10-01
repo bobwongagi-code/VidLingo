@@ -3,6 +3,7 @@ import Foundation
 public enum LLMResponseParserError: LocalizedError, Sendable, Equatable {
     case invalidJSON
     case emptyOutput
+    case incompleteOutput
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +11,8 @@ public enum LLMResponseParserError: LocalizedError, Sendable, Equatable {
             "模型返回的 JSON 无法解析。"
         case .emptyOutput:
             "模型返回了空文本。"
+        case .incompleteOutput:
+            "模型服务返回的结果不完整或被截断，无法作为完整结果使用，请重试。"
         }
     }
 }
@@ -26,6 +29,23 @@ public enum LLMResponseParser {
 
         guard let payload = object as? [String: Any] else {
             throw LLMResponseParserError.invalidJSON
+        }
+        if let status = payload["status"] as? String,
+           ["incomplete", "failed", "cancelled", "canceled", "queued", "in_progress"].contains(status.lowercased()) {
+            throw LLMResponseParserError.incompleteOutput
+        }
+        if let details = payload["incomplete_details"], !(details is NSNull) {
+            throw LLMResponseParserError.incompleteOutput
+        }
+        if let error = payload["error"], !(error is NSNull) {
+            throw LLMResponseParserError.incompleteOutput
+        }
+        if let choices = payload["choices"] as? [[String: Any]],
+           choices.contains(where: { choice in
+               guard let finishReason = choice["finish_reason"] as? String else { return false }
+               return ["length", "content_filter", "tool_calls", "function_call"].contains(finishReason.lowercased())
+           }) {
+            throw LLMResponseParserError.incompleteOutput
         }
 
         let candidates: [Any?] = [
