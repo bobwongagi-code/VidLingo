@@ -6,6 +6,12 @@ final class TranslationProviderTests: XCTestCase {
         XCTAssertEqual(TranslationProviderID.allCases, [.rootify, .deepSeek, .custom])
     }
 
+    func testAllTranslationKeysUseVidLingoServices() {
+        for provider in TranslationProviderID.allCases {
+            XCTAssertTrue(provider.keychainService.hasPrefix("VidLingo."))
+        }
+    }
+
     func testRootifyUsesCompanyGatewayAndLuna() {
         XCTAssertEqual(TranslationProviderID.rootify.defaultModel, "gpt-5.6-luna")
         XCTAssertEqual(

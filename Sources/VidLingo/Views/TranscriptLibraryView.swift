@@ -62,14 +62,6 @@ struct TranscriptLibraryView: View {
                 Label(AppText.openSaveFolder, systemImage: "folder")
             }
 
-            if session.savedTranscripts.contains(where: \.isLegacy) {
-                Button {
-                    session.importLegacyTranscripts()
-                } label: {
-                    Label(AppText.importLegacyTranscripts, systemImage: "arrow.down.doc")
-                }
-            }
-
             Button(role: .destructive) {
                 isDeleteAllConfirmationPresented = true
             } label: {
@@ -141,11 +133,7 @@ struct TranscriptLibraryView: View {
                     }
                 }
 
-                if selectedTranscript.isLegacy {
-                    Label(AppText.legacyTranscriptReadOnly, systemImage: "lock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if selectedTranscript.isVisualGeneratedCopy {
+                if selectedTranscript.isVisualGeneratedCopy {
                     Label(
                         "\(AppText.currentArtifactVisualGenerated)（截图 \(selectedTranscript.manifest?.frameCount ?? 0) 张）",
                         systemImage: "photo"
@@ -158,13 +146,11 @@ struct TranscriptLibraryView: View {
                     HStack(alignment: .top, spacing: 12) {
                         draftEditorPane(
                             title: AppText.original,
-                            text: $session.savedDraftSourceText,
-                            isEditable: !selectedTranscript.isLegacy
+                            text: $session.savedDraftSourceText
                         )
                         draftEditorPane(
                             title: AppText.translation,
-                            text: $session.savedDraftTranslationText,
-                            isEditable: !selectedTranscript.isLegacy
+                            text: $session.savedDraftTranslationText
                         )
                     }
                     .tabItem {
@@ -191,7 +177,6 @@ struct TranscriptLibraryView: View {
                         Label(AppText.saveEdits, systemImage: "checkmark")
                     }
                     .keyboardShortcut("s", modifiers: [.command])
-                    .disabled(selectedTranscript.isLegacy)
 
                     Spacer()
 
@@ -200,7 +185,6 @@ struct TranscriptLibraryView: View {
                     } label: {
                         Label(AppText.deleteSavedTranscript, systemImage: "trash")
                     }
-                    .disabled(selectedTranscript.isLegacy)
                 }
             }
             .padding(18)
@@ -209,7 +193,7 @@ struct TranscriptLibraryView: View {
         }
     }
 
-    private func draftEditorPane(title: String, text: Binding<String>, isEditable: Bool) -> some View {
+    private func draftEditorPane(title: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.caption.weight(.semibold))
@@ -219,7 +203,6 @@ struct TranscriptLibraryView: View {
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .disabled(!isEditable)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

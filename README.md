@@ -40,7 +40,7 @@ Custom         user-provided HTTPS OpenAI-compatible chat completions URL
 
 Custom endpoints must not contain query strings or fragments; put credentials in the provider API-key field instead. Responses may use `choices[].message.content`, content blocks, `choices[].text`, top-level `output_text`, or an `output` text structure.
 
-API keys are stored in macOS Keychain per provider. The previous DeepSeek key is still read as a migration fallback.
+API keys are stored in macOS Keychain per provider, using VidLingo's own entries.
 
 
 Fun-ASR uses the workspace-specific native endpoint. Replace `<workspace-id>` with the ID from your deployment:
@@ -73,12 +73,6 @@ New saved transcripts are written as manifest-backed directories to:
 ```
 
 Each completed translation is published as one directory containing `manifest.json`, `original.txt`, `translation.txt`, and, when timestamps are available, `bilingual.srt`. Incomplete staging directories are ignored and cleaned up on a later startup.
-
-VidLingo reads old saved transcript files as read-only records. Use the explicit import action to copy them into VidLingo storage; delete-all only deletes VidLingo-owned records:
-
-```text
-~/Library/Application Support/AirTranslate/Transcripts/
-```
 
 ## Build and Verify
 

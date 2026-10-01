@@ -87,24 +87,15 @@ enum AppText {
     static let saveEdits = "保存修改"
     static let deleteSavedTranscript = "删除记录"
     static let deleteAllSavedTranscripts = "删除全部"
-    static let deleteAllSavedTranscriptsConfirmation = "确定删除全部 VidLingo 记录？旧 AirTranslate 记录不会被删除。"
+    static let deleteAllSavedTranscriptsConfirmation = "确定删除全部 VidLingo 记录？"
     static let noSavedTranscriptSelected = "未选择记录"
-    static let legacyTranscriptReadOnly = "旧 AirTranslate 记录只读，请先导入到 VidLingo 后再编辑或删除。"
     static let translationMissing = "译文文件不存在。"
     static let savedEdits = "记录修改已保存。"
     static let deletedSavedTranscript = "记录已删除。"
-    static let deletedCurrentTranscripts = "VidLingo 记录已删除；旧 AirTranslate 记录未修改。"
-    static let noLegacyTranscripts = "没有可导入的旧 AirTranslate 记录。"
-    static func importedLegacyTranscripts(imported: Int, skipped: Int, failed: Int) -> String {
-        if failed == 0, skipped == 0 {
-            return "已复制导入 \(imported) 条旧 AirTranslate 记录，原记录保持不变。"
-        }
-        return "已导入 \(imported) 条旧记录，跳过 \(skipped) 条已导入记录，\(failed) 条导入失败；原记录保持不变。"
-    }
+    static let deletedCurrentTranscripts = "VidLingo 记录已删除。"
     static func deleteSomeTranscriptsFailed(_ count: Int) -> String {
-        "\(count) 条 VidLingo 记录删除失败，其他记录已处理；旧 AirTranslate 记录未修改。"
+        "\(count) 条记录未能删除，请重试；其他记录已删除。"
     }
-    static let importLegacyTranscripts = "导入旧 AirTranslate 记录"
     static let clearDiagnostics = "清理诊断记录"
     static let diagnosticsCleared = "诊断记录已清理。"
     static func diagnosticsClearFailed(_ message: String) -> String {

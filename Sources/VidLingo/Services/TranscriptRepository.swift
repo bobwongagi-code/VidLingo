@@ -4,7 +4,6 @@ import VidLingoCore
 
 struct TranscriptRepository {
     let currentDirectoryURL: URL
-    let legacyDirectoryURL: URL
     private let fileManager: FileManager
 
     init(fileManager: FileManager = .default) {
@@ -15,27 +14,21 @@ struct TranscriptRepository {
         currentDirectoryURL = applicationSupportURL
             .appendingPathComponent("VidLingo", isDirectory: true)
             .appendingPathComponent("Transcripts", isDirectory: true)
-        legacyDirectoryURL = applicationSupportURL
-            .appendingPathComponent("AirTranslate", isDirectory: true)
-            .appendingPathComponent("Transcripts", isDirectory: true)
         self.fileManager = fileManager
     }
 
     init(
         currentDirectoryURL: URL,
-        legacyDirectoryURL: URL,
         fileManager: FileManager = .default
     ) {
         self.currentDirectoryURL = currentDirectoryURL
-        self.legacyDirectoryURL = legacyDirectoryURL
         self.fileManager = fileManager
     }
 
     func load() throws -> [SavedTranscript] {
         try fileManager.createDirectory(at: currentDirectoryURL, withIntermediateDirectories: true)
         try ArtifactPublisher.removeStaleStagingDirectories(in: currentDirectoryURL, fileManager: fileManager)
-        return (try loadArtifacts(in: currentDirectoryURL, origin: .current)
-            + loadArtifacts(in: legacyDirectoryURL, origin: .legacyAirTranslate))
+        return try loadArtifacts(in: currentDirectoryURL)
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -50,7 +43,6 @@ struct TranscriptRepository {
         videoFileName: String,
         kind: TranscriptArtifactKind,
         frameData: [Data] = [],
-        sourceIdentity: String? = nil,
         timedSegments: [TimedTranscriptSegment] = []
     ) throws -> PublishedTranscriptArtifact {
         let manifest = TranscriptArtifactManifest(
@@ -62,7 +54,6 @@ struct TranscriptRepository {
             providerID: provider.rawValue,
             modelName: modelName,
             videoFileName: videoFileName,
-            sourceIdentity: sourceIdentity,
             frameCount: frameData.isEmpty ? nil : frameData.count,
             frameDigest: Self.frameDigest(frameData),
             timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
@@ -83,9 +74,6 @@ struct TranscriptRepository {
         sourceText: String,
         translatedText: String
     ) throws -> String {
-        guard !transcript.isLegacy else {
-            throw TranscriptRepositoryError.legacyReadOnly
-        }
         guard let translationFileURL = transcript.translationFileURL else {
             throw TranscriptRepositoryError.translationMissing
         }
@@ -112,7 +100,6 @@ struct TranscriptRepository {
             providerID: oldManifest?.providerID,
             modelName: oldManifest?.modelName,
             videoFileName: oldManifest?.videoFileName,
-            sourceIdentity: oldManifest?.sourceIdentity,
             frameCount: oldManifest?.frameCount,
             frameDigest: oldManifest?.frameDigest,
             timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
@@ -125,7 +112,7 @@ struct TranscriptRepository {
             timelineText: timedSegments.isEmpty ? nil : SRTTimelineCodec.encode(timedSegments),
             fileManager: fileManager
         )
-        let publishedRecordID = "\(TranscriptOrigin.current.rawValue):\(publishedArtifact.id)"
+        let publishedRecordID = "current:\(publishedArtifact.id)"
 
         do {
             if oldManifest != nil {
@@ -147,9 +134,6 @@ struct TranscriptRepository {
     }
 
     func delete(_ transcript: SavedTranscript) throws {
-        guard !transcript.isLegacy else {
-            throw TranscriptRepositoryError.legacyReadOnly
-        }
         if transcript.manifest != nil {
             try fileManager.removeItem(at: transcript.sourceFileURL.deletingLastPathComponent())
         } else {
@@ -168,7 +152,7 @@ struct TranscriptRepository {
     func deleteAllCurrent(_ transcripts: [SavedTranscript]) -> TranscriptDeletionResult {
         var deletedIDs = [String]()
         var failedIDs = [String]()
-        for transcript in transcripts where !transcript.isLegacy {
+        for transcript in transcripts {
             do {
                 try delete(transcript)
                 deletedIDs.append(transcript.id)
@@ -179,52 +163,17 @@ struct TranscriptRepository {
         return TranscriptDeletionResult(deletedIDs: deletedIDs, failedIDs: failedIDs)
     }
 
-    func importLegacy(_ transcripts: [SavedTranscript]) -> (imported: Int, skipped: Int, failed: Int) {
-        var imported = 0
-        var skipped = 0
-        var failed = 0
-        for transcript in transcripts where transcript.isLegacy {
-            do {
-                let sourceIdentity = transcript.sourceFileURL.standardizedFileURL.path
-                let manifest = TranscriptArtifactManifest(
-                    id: Self.legacyImportID(for: sourceIdentity),
-                    createdAt: Date(),
-                    kind: transcript.artifactKind,
-                    sourceLanguageID: nil,
-                    targetLanguageID: "zh-CN",
-                    providerID: "legacy-airtranslate",
-                    modelName: nil,
-                    videoFileName: nil,
-                    sourceIdentity: sourceIdentity
-                )
-                _ = try ArtifactPublisher.publish(
-                    sourceText: transcript.sourceText,
-                    translatedText: transcript.translatedText ?? "",
-                    manifest: manifest,
-                    in: currentDirectoryURL,
-                    fileManager: fileManager
-                )
-                imported += 1
-            } catch ArtifactPublisherError.destinationAlreadyExists {
-                skipped += 1
-            } catch {
-                failed += 1
-            }
-        }
-        return (imported, skipped, failed)
-    }
-
-    private func loadArtifacts(in directoryURL: URL, origin: TranscriptOrigin) throws -> [SavedTranscript] {
+    private func loadArtifacts(in directoryURL: URL) throws -> [SavedTranscript] {
         guard fileManager.fileExists(atPath: directoryURL.path) else { return [] }
         let entries = try fileManager.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
-        let artifactRecords = entries.compactMap { loadArtifact(at: $0, origin: origin) }
+        let artifactRecords = entries.compactMap { loadArtifact(at: $0) }
         let flatRecords = entries
             .filter { $0.pathExtension == "txt" && $0.lastPathComponent.hasSuffix("_original.txt") }
-            .compactMap { loadFlatTranscript(at: $0, origin: origin) }
+            .compactMap { loadFlatTranscript(at: $0) }
         return artifactRecords + flatRecords
     }
 
@@ -236,7 +185,7 @@ struct TranscriptRepository {
         try fileManager.removeItem(at: retiredDirectoryURL)
     }
 
-    private func loadArtifact(at directoryURL: URL, origin: TranscriptOrigin) -> SavedTranscript? {
+    private func loadArtifact(at directoryURL: URL) -> SavedTranscript? {
         guard (try? directoryURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
             return nil
         }
@@ -252,20 +201,19 @@ struct TranscriptRepository {
         let updatedAt = (try? directoryURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? manifest.createdAt
         let timedSegments = loadTimeline(from: directoryURL, manifest: manifest)
         return SavedTranscript(
-            id: "\(origin.rawValue):\(manifest.id)",
+            id: "current:\(manifest.id)",
             sourceFileURL: sourceURL,
             translationFileURL: translationURL,
             sourceText: sourceText,
             translatedText: translatedText,
             updatedAt: updatedAt,
-            origin: origin,
             artifactKind: manifest.kind,
             manifest: manifest,
             timedSegments: timedSegments
         )
     }
 
-    private func loadFlatTranscript(at originalURL: URL, origin: TranscriptOrigin) -> SavedTranscript? {
+    private func loadFlatTranscript(at originalURL: URL) -> SavedTranscript? {
         let suffix = "_original.txt"
         let stem = String(originalURL.lastPathComponent.dropLast(suffix.count))
         let translationURL = originalURL.deletingLastPathComponent().appendingPathComponent("\(stem)_translation.txt")
@@ -275,13 +223,12 @@ struct TranscriptRepository {
         }
         let updatedAt = (try? originalURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
         return SavedTranscript(
-            id: "\(origin.rawValue):\(originalURL.standardizedFileURL.path)",
+            id: "current:\(originalURL.standardizedFileURL.path)",
             sourceFileURL: originalURL,
             translationFileURL: translationURL,
             sourceText: sourceText,
             translatedText: translatedText,
-            updatedAt: updatedAt,
-            origin: origin
+            updatedAt: updatedAt
         )
     }
 
@@ -316,12 +263,6 @@ struct TranscriptRepository {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func legacyImportID(for sourceIdentity: String) -> String {
-        let digest = SHA256.hash(data: Data(sourceIdentity.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return "legacy-\(digest)"
-    }
 }
 
 struct TranscriptDeletionResult: Sendable, Equatable {
@@ -331,15 +272,12 @@ struct TranscriptDeletionResult: Sendable, Equatable {
 
 enum TranscriptRepositoryError: LocalizedError, Equatable {
     case translationMissing
-    case legacyReadOnly
     case savedButRetirementFailed(recordID: String, message: String)
 
     var errorDescription: String? {
         switch self {
         case .translationMissing:
             AppText.translationMissing
-        case .legacyReadOnly:
-            AppText.legacyTranscriptReadOnly
         case let .savedButRetirementFailed(_, message):
             "修改已保存，但旧记录清理失败：\(message)"
         }

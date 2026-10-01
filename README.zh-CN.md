@@ -42,7 +42,7 @@ Custom         用户填写的 OpenAI-compatible chat completions URL（HTTPS）
 
 自定义 endpoint 不能包含查询参数或 URL fragment；凭证应填写在服务对应的 API key 字段中。响应支持 `choices[].message.content`、内容块数组、`choices[].text`、顶层 `output_text`，以及包含文本的 `output` 结构。
 
-API key 会按服务分别保存在 macOS Keychain 中。旧 DeepSeek key 会继续作为迁移兼容读取。
+API key 按服务分别保存在 macOS Keychain 中，只读取 VidLingo 自己的密钥项。
 
 
 Fun-ASR 使用工作空间对应的原生接口，请将 `<workspace-id>` 替换为你自己的部署 ID：
@@ -72,12 +72,6 @@ Resources/TranslationSystemPrompt.md
 
 ```text
 ~/Library/Application Support/VidLingo/Transcripts/
-```
-
-应用会以只读方式读取旧目录中的记录。点击“导入旧 AirTranslate 记录”后，才会复制到 VidLingo 资料库；删除全部只删除 VidLingo 自己的记录：
-
-```text
-~/Library/Application Support/AirTranslate/Transcripts/
 ```
 
 ## 构建和验证

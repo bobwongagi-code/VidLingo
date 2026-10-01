@@ -1,14 +1,8 @@
 import Foundation
 import VidLingoCore
 
-enum TranscriptOrigin: String, Sendable {
-    case current
-    case legacyAirTranslate
-}
-
 struct SavedTranscript: Identifiable, Equatable {
     let id: String
-    let origin: TranscriptOrigin
     let artifactKind: TranscriptArtifactKind
     let manifest: TranscriptArtifactManifest?
     var title: String
@@ -21,7 +15,6 @@ struct SavedTranscript: Identifiable, Equatable {
     var timedSegments: [TimedTranscriptSegment]
     var updatedAt: Date
 
-    var isLegacy: Bool { origin == .legacyAirTranslate }
     var isVisualGeneratedCopy: Bool { artifactKind == .visualGeneratedCopy }
     var hasTimeline: Bool { !timedSegments.isEmpty }
 
@@ -33,14 +26,12 @@ struct SavedTranscript: Identifiable, Equatable {
         fileURL: URL,
         sourceText: String,
         updatedAt: Date,
-        origin: TranscriptOrigin = .current,
         artifactKind: TranscriptArtifactKind = .transcriptionTranslation,
         manifest: TranscriptArtifactManifest? = nil,
         timedSegments: [TimedTranscriptSegment] = []
     ) {
         let fileName = fileURL.lastPathComponent
-        self.id = "\(origin.rawValue):\(fileURL.standardizedFileURL.path)"
-        self.origin = origin
+        self.id = "current:\(fileURL.standardizedFileURL.path)"
         self.artifactKind = artifactKind
         self.manifest = manifest
         self.title = SavedTranscript.title(from: sourceText, fallback: fileName)
@@ -61,13 +52,11 @@ struct SavedTranscript: Identifiable, Equatable {
         sourceText: String,
         translatedText: String,
         updatedAt: Date,
-        origin: TranscriptOrigin = .current,
         artifactKind: TranscriptArtifactKind = .transcriptionTranslation,
         manifest: TranscriptArtifactManifest? = nil,
         timedSegments: [TimedTranscriptSegment] = []
     ) {
         self.id = id
-        self.origin = origin
         self.artifactKind = artifactKind
         self.manifest = manifest
         self.title = SavedTranscript.title(from: sourceText, fallback: id)

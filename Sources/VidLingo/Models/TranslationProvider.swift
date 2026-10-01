@@ -51,15 +51,6 @@ enum TranslationProviderID: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var legacyKeychainServices: [String] {
-        switch self {
-        case .deepSeek:
-            ["AirTranslate.OpenAI"]
-        default:
-            []
-        }
-    }
-
     func capabilities(for model: String) -> TranslationProviderCapabilities {
         let normalizedModel = model.lowercased()
         let supportsVision: Bool

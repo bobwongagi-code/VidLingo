@@ -409,10 +409,6 @@ final class TranslationSessionStore {
 
     func saveSelectedTranscriptEdits() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
-        guard !selectedTranscript.isLegacy else {
-            statusMessage = AppText.legacyTranscriptReadOnly
-            return
-        }
         var publishedRecordID: String?
         do {
             publishedRecordID = try transcriptRepository.saveEdits(
@@ -436,10 +432,6 @@ final class TranslationSessionStore {
 
     func deleteSelectedTranscript() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
-        guard !selectedTranscript.isLegacy else {
-            statusMessage = AppText.legacyTranscriptReadOnly
-            return
-        }
         do {
             try transcriptRepository.delete(selectedTranscript)
             statusMessage = AppText.deletedSavedTranscript
@@ -461,19 +453,6 @@ final class TranslationSessionStore {
         statusMessage = result.failedIDs.isEmpty
             ? AppText.deletedCurrentTranscripts
             : AppText.deleteSomeTranscriptsFailed(result.failedIDs.count)
-    }
-
-    func importLegacyTranscripts() {
-        let legacyTranscripts = savedTranscripts.filter(\.isLegacy)
-        let result = transcriptRepository.importLegacy(legacyTranscripts)
-        guard loadSavedTranscripts() else { return }
-        statusMessage = result.imported == 0 && result.skipped == 0 && result.failed == 0
-            ? AppText.noLegacyTranscripts
-            : AppText.importedLegacyTranscripts(
-                imported: result.imported,
-                skipped: result.skipped,
-                failed: result.failed
-            )
     }
 
     @discardableResult

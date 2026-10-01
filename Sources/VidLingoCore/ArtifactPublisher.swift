@@ -15,7 +15,6 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
     public let providerID: String?
     public let modelName: String?
     public let videoFileName: String?
-    public let sourceIdentity: String?
     public let frameCount: Int?
     public let frameDigest: String?
     public let timelineFileName: String?
@@ -29,7 +28,6 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
         providerID: String?,
         modelName: String?,
         videoFileName: String?,
-        sourceIdentity: String? = nil,
         frameCount: Int? = nil,
         frameDigest: String? = nil,
         timelineFileName: String? = nil
@@ -43,7 +41,6 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
         self.providerID = providerID
         self.modelName = modelName
         self.videoFileName = videoFileName
-        self.sourceIdentity = sourceIdentity
         self.frameCount = frameCount
         self.frameDigest = frameDigest
         self.timelineFileName = timelineFileName
