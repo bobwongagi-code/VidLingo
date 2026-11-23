@@ -18,6 +18,12 @@ jobs:
         run: bash script/test_build_signing.sh
       - name: Build the app target
         run: swift build
+      - name: Ensure ffmpeg is available for media regression tests
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          command -v ffmpeg || brew install ffmpeg
+          ffmpeg -version
       - name: Run Swift tests
         run: swift test
       - name: Build the application bundle

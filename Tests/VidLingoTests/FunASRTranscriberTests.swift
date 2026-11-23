@@ -172,6 +172,24 @@ final class FunASRTranscriberTests: XCTestCase {
         XCTAssertTrue(result.segments.isEmpty)
     }
 
+    func testSentenceTimelineMustPreserveKoreanWordBoundaries() throws {
+        let lines = [
+            #"data:{"output":{"text":"아버지가 방에 들어가신다.","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"아버지 가방에 들어가신다."}}}"#
+        ]
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+        XCTAssertEqual(result.text, "아버지가 방에 들어가신다.")
+        XCTAssertTrue(result.segments.isEmpty)
+    }
+
+    func testSentenceTimelineMustPreserveCurrencyAndSign() throws {
+        for (total, timed, shouldKeep) in [("$5", "€5", false), ("-$5", "$5", false), ("$ 5", "$5", true)] {
+            let line = #"data:{"output":{"text":"Price is \#(total).","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"Price is \#(timed)."}}}"#
+            let result = try FunASRTranscriber.transcription(fromSSELines: [line])
+            XCTAssertEqual(result.text, "Price is \(total).")
+            XCTAssertEqual(!result.segments.isEmpty, shouldKeep, "\(total) versus \(timed)")
+        }
+    }
+
     func testNumericPunctuationMustMatchBeforeKeepingSentenceTimeline() throws {
         let exactLines = [
             #"data:{"output":{"text":"Price is RM 1.99.","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"Price is RM 1.99."}}}"#

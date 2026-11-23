@@ -495,9 +495,21 @@ struct OfflineTranslationCoordinator {
         let duration = try await asset.load(.duration)
         let seconds = CMTimeGetSeconds(duration)
         let audioTracks = try await asset.load(.tracks).filter { $0.mediaType == .audio }
-        var fallbackTrack: (index: Int, startSeconds: Double)?
-
-        for (index, track) in audioTracks.enumerated() {
+        var prioritizedTracks = Array(audioTracks.enumerated())
+        if audioTracks.count > 1 {
+            var enabled: [(Int, AVAssetTrack)] = []
+            var alternate: [(Int, AVAssetTrack)] = []
+            for (index, track) in prioritizedTracks {
+                if try await track.load(.isEnabled) {
+                    enabled.append((index, track))
+                } else {
+                    alternate.append((index, track))
+                }
+            }
+            // 保留原始流序号，让 ffmpeg 提取与时间偏移使用同一条音轨。
+            prioritizedTracks = enabled + alternate
+        }
+        for (index, track) in prioritizedTracks {
             let segments = try await track.load(.segments)
             if let firstMediaSegment = segments.first(where: { !$0.isEmpty }) {
                 let startSeconds = CMTimeGetSeconds(firstMediaSegment.timeMapping.target.start)
@@ -515,21 +527,16 @@ struct OfflineTranslationCoordinator {
             guard startSeconds.isFinite,
                   trackDurationSeconds.isFinite,
                   trackDurationSeconds > 0 else {
-                throw OfflineVideoTranslationError.invalidVideo
+                continue
             }
-            if fallbackTrack == nil {
-                fallbackTrack = (index, max(0, startSeconds))
-            }
-        }
-
-        if let fallbackTrack {
             return OfflineVideoPreflight(
                 durationSeconds: seconds,
-                audioTrackIndex: fallbackTrack.index,
-                audioStartOffsetSeconds: fallbackTrack.startSeconds
+                audioTrackIndex: index,
+                audioStartOffsetSeconds: max(0, startSeconds)
             )
         }
 
+        guard audioTracks.isEmpty else { throw OfflineVideoTranslationError.invalidVideo }
         return OfflineVideoPreflight(
             durationSeconds: seconds,
             audioTrackIndex: nil,
