@@ -14,6 +14,14 @@ final class LanguageTextDetectorTests: XCTestCase {
         XCTAssertEqual(LanguageTextDetector.detect(text)?.id, "ms-MY")
     }
 
+    func testSharedWordsDoNotMaskMalaySignalsOrChooseEitherLanguageAlone() {
+        XCTAssertEqual(LanguageTextDetector.detect(
+            "Saya nak tunjuk yang ini dan yang itu. Boleh pakai dengan mudah untuk kulit sensitif."
+        )?.id, "ms-MY")
+        XCTAssertNil(LanguageTextDetector.detect("Saya boleh guna yang ini dan yang itu untuk mereka."))
+        XCTAssertEqual(LanguageTextDetector.detect("Je veux une pomme avec une salade.")?.id, "fr-FR")
+    }
+
     func testIgnoresSpanishMarkersInsideOtherWords() {
         let text = "kelapa delima contact tuna porridge"
 

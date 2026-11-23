@@ -41,6 +41,7 @@ Custom         user-provided HTTPS OpenAI-compatible chat completions URL
 Custom endpoints must not contain query strings or fragments; put credentials in the provider API-key field instead. Responses may use `choices[].message.content`, content blocks, `choices[].text`, top-level `output_text`, or an `output` text structure.
 
 API keys are stored in macOS Keychain per provider, using VidLingo's own entries.
+Custom keys are saved per service address (scheme, host, and port). After upgrading from a version with one shared Custom key, save the key again for the intended address.
 
 
 Fun-ASR uses the workspace-specific native endpoint. Replace `<workspace-id>` with the ID from your deployment:
@@ -72,7 +73,7 @@ New saved transcripts are written as manifest-backed directories to:
 ~/Library/Application Support/VidLingo/Transcripts/
 ```
 
-Each completed translation is published as one directory containing `manifest.json`, `original.txt`, `translation.txt`, and, when timestamps are available, `bilingual.srt`. Incomplete staging directories are ignored and cleaned up on a later startup.
+Each completed translation is published as one directory containing `manifest.json`, `original.txt`, and `translation.txt`. When timestamps are available, the SRT filename reflects its contents: `bilingual.srt`, `source.srt`, or `partial.srt`. After text edits, the original subtitles remain available in the library and are marked as needing realignment. Incomplete staging directories are ignored and cleaned up on a later startup.
 
 ## Build and Verify
 

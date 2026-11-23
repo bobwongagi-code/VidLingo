@@ -3,9 +3,32 @@ import VidLingoCore
 
 struct SidebarView: View {
     @Bindable var session: TranslationSessionStore
-    @State private var apiKey = ""
+    @State private var apiKeyDraft: (identity: String, text: String)?
     @State private var funASRAPIKey = ""
     @State private var isLibraryPresented = false
+
+    private var currentAPIKeyDraft: String {
+        guard let apiKeyDraft, apiKeyDraft.identity == session.translationCredentialIdentity else { return "" }
+        return apiKeyDraft.text
+    }
+
+    private var apiKeyBinding: Binding<String> {
+        let identity = session.translationCredentialIdentity
+        return Binding(
+            get: { currentAPIKeyDraft },
+            set: { text in
+                guard session.translationCredentialIdentity == identity else { return }
+                apiKeyDraft = (identity, text)
+            }
+        )
+    }
+
+    private var translationKeyStatus: String {
+        if session.translationProvider == .custom, session.translationAPIKeyAvailability == .missing {
+            return AppText.customEndpointAPIKeyMissing
+        }
+        return AppText.keychainAvailabilityText(session.translationAPIKeyAvailability)
+    }
 
     var body: some View {
         ScrollView {
@@ -19,6 +42,9 @@ struct SidebarView: View {
             .padding(18)
         }
         .background(.bar)
+        .onChange(of: session.translationCredentialIdentity) { _, identity in
+            if apiKeyDraft?.identity != identity { apiKeyDraft = nil }
+        }
         .sheet(isPresented: $isLibraryPresented) {
             TranscriptLibraryView(session: session)
         }
@@ -123,24 +149,29 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("翻译 API key")
                         .font(.caption.weight(.semibold))
-                    SecureField(AppText.translationAPIKeyPlaceholder(session.translationProvider.title), text: $apiKey)
+                    SecureField(
+                        AppText.translationAPIKeyPlaceholder(session.translationProvider.title),
+                        text: apiKeyBinding
+                    )
                         .textFieldStyle(.roundedBorder)
 
                     HStack {
-                        Text(AppText.keychainAvailabilityText(session.translationAPIKeyAvailability))
+                        Text(translationKeyStatus)
                             .font(.caption)
                             .foregroundStyle(session.translationAPIKeyAvailability == .configured ? .green : .secondary)
                         Spacer()
                         Button(AppText.saveTranslationAPIKey) {
-                            session.saveTranslationAPIKey(apiKey)
-                            apiKey = ""
+                            let key = currentAPIKeyDraft
+                            guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                            session.saveTranslationAPIKey(key)
+                            apiKeyDraft = nil
                         }
-                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(currentAPIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
 
                     Button(AppText.removeTranslationAPIKey) {
                         session.removeTranslationAPIKey()
-                        apiKey = ""
+                        apiKeyDraft = nil
                     }
                     .disabled(!session.hasTranslationAPIKey)
 

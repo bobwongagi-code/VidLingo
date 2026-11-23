@@ -18,6 +18,7 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
     public let frameCount: Int?
     public let frameDigest: String?
     public let timelineFileName: String?
+    public let timelineNeedsRealignment: Bool?
 
     public init(
         id: String,
@@ -30,7 +31,8 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
         videoFileName: String?,
         frameCount: Int? = nil,
         frameDigest: String? = nil,
-        timelineFileName: String? = nil
+        timelineFileName: String? = nil,
+        timelineNeedsRealignment: Bool? = nil
     ) {
         self.schemaVersion = 2
         self.id = id
@@ -44,6 +46,7 @@ public struct TranscriptArtifactManifest: Codable, Sendable, Equatable {
         self.frameCount = frameCount
         self.frameDigest = frameDigest
         self.timelineFileName = timelineFileName
+        self.timelineNeedsRealignment = timelineNeedsRealignment
     }
 }
 

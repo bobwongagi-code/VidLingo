@@ -28,6 +28,17 @@ struct OfflineTranslationRunResult: Sendable {
     let frameData: [Data]
 }
 
+struct OfflineVideoPreviewMetadata: Sendable, Equatable {
+    let durationText: String
+    let hasAudio: Bool?
+}
+
+struct OfflineVideoPreflight: Sendable {
+    let durationSeconds: Double
+    let audioTrackIndex: Int?
+    let audioStartOffsetSeconds: Double?
+}
+
 struct OfflineTranslationCoordinator {
     typealias ProgressHandler = @Sendable (String) async -> Void
 
@@ -64,18 +75,38 @@ struct OfflineTranslationCoordinator {
 
         do {
             try token.check()
-            guard request.allowsCloudAudioTranscription else {
+            guard request.allowsCloudAudioTranscription
+                    || (request.allowsCloudVideoFrames && request.allowsVisualSalesCopy) else {
                 throw OfflineVideoTranslationError.cloudAudioConsentRequired
             }
             let preflightStartedAt = Date()
-            let videoDuration = try await Self.preflightVideo(request.videoURL, token: token)
+            let preflight = try await Self.preflightVideo(request.videoURL, token: token)
+            let videoDuration = preflight.durationSeconds
             videoDurationSeconds = Int(videoDuration.rounded())
             recordStage("mediaPreflight", startedAt: preflightStartedAt)
+
+            guard let audioTrackIndex = preflight.audioTrackIndex else {
+                try token.check()
+                let visualStartedAt = Date()
+                let result = try await generateNoSpeechResult(
+                    request: request,
+                    videoDuration: videoDuration,
+                    token: token,
+                    reportProgress: reportProgress
+                )
+                recordStage("visualFallback", startedAt: visualStartedAt)
+                diagnosticOutcome = "noEffectiveSpeech"
+                return result
+            }
+            guard request.allowsCloudAudioTranscription else {
+                throw OfflineVideoTranslationError.cloudAudioConsentRequired
+            }
 
             let audioStartedAt = Date()
             audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(
                 from: request.videoURL,
                 videoDuration: videoDuration,
+                audioTrackIndex: audioTrackIndex,
                 token: token
             )
             guard let audioURL else {
@@ -124,9 +155,11 @@ struct OfflineTranslationCoordinator {
                     sourceText: organizedText
                 )
             }
-            let timedSegments = transcription.hasWordTimestamps || rawTimedSegments.count > 1
-                ? rawTimedSegments
-                : []
+            let timedSegments = Self.alignTimedSegmentsToVideo(
+                rawTimedSegments,
+                audioStartOffsetSeconds: preflight.audioStartOffsetSeconds,
+                videoDurationSeconds: videoDuration
+            )
             guard SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
                 sourceText,
                 language: sourceLanguage
@@ -202,6 +235,28 @@ struct OfflineTranslationCoordinator {
         let seconds = duration.map(CMTimeGetSeconds) ?? 0
         guard seconds.isFinite, seconds > 0 else { return "" }
         return String(format: "%d:%02d", Int(seconds.rounded()) / 60, Int(seconds.rounded()) % 60)
+    }
+
+    static func previewMetadata(for videoURL: URL) async -> OfflineVideoPreviewMetadata {
+        let asset = AVURLAsset(url: videoURL)
+        do {
+            let metadata = try await AsyncOperationTimeout.run(
+                timeout: 15,
+                onCancel: { asset.cancelLoading() }
+            ) {
+                try await Self.loadVideoPreflight(asset)
+            }
+            let seconds = metadata.durationSeconds
+            let durationText = seconds.isFinite && seconds > 0
+                ? Self.durationText(seconds)
+                : ""
+            return OfflineVideoPreviewMetadata(
+                durationText: durationText,
+                hasAudio: metadata.audioTrackIndex != nil
+            )
+        } catch {
+            return OfflineVideoPreviewMetadata(durationText: "", hasAudio: nil)
+        }
     }
 
     private func detectLanguage(
@@ -356,21 +411,21 @@ struct OfflineTranslationCoordinator {
         return productContext
     }
 
-    private static func preflightVideo(_ videoURL: URL, token: ProcessCancellationToken) async throws -> Double {
+    static func preflightVideo(_ videoURL: URL, token: ProcessCancellationToken) async throws -> OfflineVideoPreflight {
         try token.check()
         let values = try videoURL.resourceValues(forKeys: [.fileSizeKey])
         guard let fileSize = values.fileSize, Int64(fileSize) <= MediaProcessingLimits.maxVideoBytes else {
             throw OfflineVideoTranslationError.videoTooLarge
         }
         let asset = AVURLAsset(url: videoURL)
-        let duration: CMTime
+        let preflight: OfflineVideoPreflight
         do {
-            duration = try await AsyncOperationTimeout.run(
+            preflight = try await AsyncOperationTimeout.run(
                 timeout: 15,
                 token: token,
                 onCancel: { asset.cancelLoading() }
             ) {
-                try await asset.load(.duration)
+                try await Self.loadVideoPreflight(asset)
             }
         } catch let error as ProcessSupervisorError {
             throw error
@@ -379,16 +434,107 @@ struct OfflineTranslationCoordinator {
         } catch {
             throw OfflineVideoTranslationError.invalidVideo
         }
-        let seconds = CMTimeGetSeconds(duration)
+        let seconds = preflight.durationSeconds
         guard seconds.isFinite, seconds > 0 else { throw OfflineVideoTranslationError.invalidVideo }
         guard seconds <= MediaProcessingLimits.maxVideoDurationSeconds else {
             throw OfflineVideoTranslationError.videoTooLong
         }
-        guard seconds <= FunASRTranscriber.maxDurationSeconds else {
+        if preflight.audioTrackIndex != nil,
+           seconds > FunASRTranscriber.maxDurationSeconds {
             throw OfflineVideoTranslationError.videoTooLongForFunASR
         }
         try token.check()
-        return seconds
+        return preflight
+    }
+
+    static func alignTimedSegmentsToVideo(
+        _ segments: [TimedTranscriptSegment],
+        audioStartOffsetSeconds: Double?,
+        videoDurationSeconds: Double
+    ) -> [TimedTranscriptSegment] {
+        guard videoDurationSeconds.isFinite,
+              videoDurationSeconds > 0,
+              let audioStartOffsetSeconds,
+              audioStartOffsetSeconds.isFinite,
+              audioStartOffsetSeconds >= 0,
+              audioStartOffsetSeconds <= videoDurationSeconds + 0.05 else {
+            return []
+        }
+        let videoDurationMilliseconds = Int((videoDurationSeconds * 1_000).rounded(.down))
+        let offsetMilliseconds = Int((min(audioStartOffsetSeconds, videoDurationSeconds) * 1_000).rounded(.toNearestOrAwayFromZero))
+        let maximumTimeMilliseconds = videoDurationMilliseconds + 50
+        let maximumAudioTimeMilliseconds = max(0, maximumTimeMilliseconds - offsetMilliseconds)
+        var alignedSegments = [TimedTranscriptSegment]()
+        alignedSegments.reserveCapacity(segments.count)
+        for segment in segments {
+            guard segment.startMilliseconds >= 0,
+                  segment.endMilliseconds >= segment.startMilliseconds,
+                  segment.startMilliseconds <= maximumAudioTimeMilliseconds,
+                  segment.endMilliseconds <= maximumAudioTimeMilliseconds else {
+                return []
+            }
+            let (start, startOverflow) = segment.startMilliseconds.addingReportingOverflow(offsetMilliseconds)
+            let (end, endOverflow) = segment.endMilliseconds.addingReportingOverflow(offsetMilliseconds)
+            guard !startOverflow, !endOverflow,
+                  start <= maximumTimeMilliseconds,
+                  end <= maximumTimeMilliseconds else {
+                return []
+            }
+            alignedSegments.append(TimedTranscriptSegment(
+                id: segment.id,
+                startMilliseconds: min(start, videoDurationMilliseconds),
+                endMilliseconds: min(end, videoDurationMilliseconds),
+                sourceText: segment.sourceText,
+                translatedText: segment.translatedText
+            ))
+        }
+        return alignedSegments
+    }
+
+    private static func loadVideoPreflight(_ asset: AVURLAsset) async throws -> OfflineVideoPreflight {
+        let duration = try await asset.load(.duration)
+        let seconds = CMTimeGetSeconds(duration)
+        let audioTracks = try await asset.load(.tracks).filter { $0.mediaType == .audio }
+        var fallbackTrack: (index: Int, startSeconds: Double)?
+
+        for (index, track) in audioTracks.enumerated() {
+            let segments = try await track.load(.segments)
+            if let firstMediaSegment = segments.first(where: { !$0.isEmpty }) {
+                let startSeconds = CMTimeGetSeconds(firstMediaSegment.timeMapping.target.start)
+                guard startSeconds.isFinite else { throw OfflineVideoTranslationError.invalidVideo }
+                return OfflineVideoPreflight(
+                    durationSeconds: seconds,
+                    audioTrackIndex: index,
+                    audioStartOffsetSeconds: max(0, startSeconds)
+                )
+            }
+
+            let timeRange = try await track.load(.timeRange)
+            let startSeconds = CMTimeGetSeconds(timeRange.start)
+            let trackDurationSeconds = CMTimeGetSeconds(timeRange.duration)
+            guard startSeconds.isFinite,
+                  trackDurationSeconds.isFinite,
+                  trackDurationSeconds > 0 else {
+                throw OfflineVideoTranslationError.invalidVideo
+            }
+            if fallbackTrack == nil {
+                fallbackTrack = (index, max(0, startSeconds))
+            }
+        }
+
+        if let fallbackTrack {
+            return OfflineVideoPreflight(
+                durationSeconds: seconds,
+                audioTrackIndex: fallbackTrack.index,
+                audioStartOffsetSeconds: fallbackTrack.startSeconds
+            )
+        }
+
+        return OfflineVideoPreflight(
+            durationSeconds: seconds,
+            audioTrackIndex: nil,
+            audioStartOffsetSeconds: nil
+        )
     }
 
     private static func durationText(_ seconds: Double) -> String {

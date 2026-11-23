@@ -56,7 +56,7 @@ struct TranscriptRepository {
             videoFileName: videoFileName,
             frameCount: frameData.isEmpty ? nil : frameData.count,
             frameDigest: Self.frameDigest(frameData),
-            timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
+            timelineFileName: Self.timelineFileName(for: timedSegments)
         )
         return try ArtifactPublisher.publish(
             sourceText: sourceText,
@@ -79,18 +79,15 @@ struct TranscriptRepository {
         }
 
         let oldManifest = transcript.manifest
-        let timedSegments: [TimedTranscriptSegment]
-        if sourceText == transcript.sourceText {
-            timedSegments = translatedText == transcript.translatedText
-                ? transcript.timedSegments
-                : transcript.timedSegments.map { segment in
-                    var sourceOnlySegment = segment
-                    sourceOnlySegment.translatedText = nil
-                    return sourceOnlySegment
-                }
-        } else {
-            timedSegments = []
+        let timedSegments = transcript.timedSegments
+        guard oldManifest?.timelineFileName == nil || !timedSegments.isEmpty else {
+            throw TranscriptRepositoryError.timelineUnavailable
         }
+        let timelineNeedsRealignment = !timedSegments.isEmpty && (
+            oldManifest?.timelineNeedsRealignment == true
+                || sourceText != transcript.sourceText
+                || translatedText != transcript.translatedText
+        )
         let manifest = TranscriptArtifactManifest(
             id: UUID().uuidString,
             createdAt: Date(),
@@ -102,7 +99,8 @@ struct TranscriptRepository {
             videoFileName: oldManifest?.videoFileName,
             frameCount: oldManifest?.frameCount,
             frameDigest: oldManifest?.frameDigest,
-            timelineFileName: timedSegments.isEmpty ? nil : "bilingual.srt"
+            timelineFileName: Self.timelineFileName(for: timedSegments),
+            timelineNeedsRealignment: timelineNeedsRealignment ? true : nil
         )
         let publishedArtifact = try ArtifactPublisher.publish(
             sourceText: sourceText,
@@ -238,6 +236,12 @@ struct TranscriptRepository {
         return try decoder.decode(TranscriptArtifactManifest.self, from: data)
     }
 
+    private static func timelineFileName(for segments: [TimedTranscriptSegment]) -> String? {
+        guard !segments.isEmpty else { return nil }
+        if segments.allSatisfy(\.hasTranslation) { return "bilingual.srt" }
+        return segments.contains(where: \.hasTranslation) ? "partial.srt" : "source.srt"
+    }
+
     private func loadTimeline(
         from directoryURL: URL,
         manifest: TranscriptArtifactManifest
@@ -272,12 +276,15 @@ struct TranscriptDeletionResult: Sendable, Equatable {
 
 enum TranscriptRepositoryError: LocalizedError, Equatable {
     case translationMissing
+    case timelineUnavailable
     case savedButRetirementFailed(recordID: String, message: String)
 
     var errorDescription: String? {
         switch self {
         case .translationMissing:
             AppText.translationMissing
+        case .timelineUnavailable:
+            "原字幕无法读取。请打开保存文件夹检查字幕文件，再重新打开资料库。"
         case let .savedButRetirementFailed(_, message):
             "修改已保存，但旧记录清理失败：\(message)"
         }

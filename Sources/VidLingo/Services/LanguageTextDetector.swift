@@ -57,9 +57,9 @@ enum LanguageTextDetector {
             case "en-US":
                 score += markerScore(["the", "and", "you", "this", "is", "to", "of", "for"])
             case "ms-MY":
-                score += markerScore(["yang", "dan", "ini", "itu", "saya", "nak", "boleh", "untuk", "dengan"])
+                score += malayIndonesianMarkerScore(wordSet, distinguishing: ["nak"])
             case "id-ID":
-                score += markerScore(["yang", "dan", "ini", "itu", "saya", "bisa", "untuk", "dengan", "ada"])
+                score += malayIndonesianMarkerScore(wordSet, distinguishing: ["bisa"])
             case "es-ES":
                 score += markerScore(["que", "el", "la", "de", "para", "con", "una", "por"])
             case "fr-FR":
@@ -76,6 +76,13 @@ enum LanguageTextDetector {
 
         let repetitionPenalty = min(0.4, Double(repeatedLineCount(in: normalizedText)) * 0.08)
         return max(0, min(1, score - repetitionPenalty))
+    }
+
+    private static func malayIndonesianMarkerScore(_ words: Set<String>, distinguishing: [String]) -> Double {
+        let shared = ["yang", "dan", "ini", "itu", "saya", "untuk", "dengan", "ada", "boleh"]
+        let sharedScore = min(0.20, Double(shared.filter(words.contains).count) * 0.04)
+        let distinguishingScore = Double(distinguishing.filter(words.contains).count) * 0.12
+        return sharedScore + distinguishingScore
     }
 
     private static func repeatedLineCount(in text: String) -> Int {

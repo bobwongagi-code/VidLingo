@@ -268,6 +268,7 @@ final class TranscriptRepositoryTests: XCTestCase {
         XCTAssertEqual(firstPublishedTranscript.translatedText, "第一次译文")
         XCTAssertTrue(firstPublishedTranscript.id.hasPrefix("current:"))
         XCTAssertEqual(store.savedTranscripts.count, 2)
+        XCTAssertEqual(store.statusMessage, AppText.savedEditsPreviousCopyRemains)
 
         store.savedDraftSourceText = "第二次修改"
         store.savedDraftTranslationText = "第二次译文"
@@ -343,7 +344,7 @@ final class TranscriptRepositoryTests: XCTestCase {
         XCTAssertTrue(try repository.load().isEmpty)
     }
 
-    func testEditingTranslationPreservesSourceTimelineWithoutStaleTranslations() throws {
+    func testEditingTextPreservesOriginalBilingualTimelineAndMarksItForRealignment() throws {
         let repository = TranscriptRepository(
             currentDirectoryURL: currentURL
         )
@@ -370,12 +371,83 @@ final class TranscriptRepositoryTests: XCTestCase {
         )
 
         let original = try XCTUnwrap(try repository.load().first)
-        try repository.saveEdits(for: original, sourceText: "原文", translatedText: "新译文")
+        try repository.saveEdits(for: original, sourceText: "改正原文", translatedText: "新译文")
 
         let updated = try XCTUnwrap(try repository.load().first)
-        XCTAssertEqual(updated.timedSegments.count, 1)
-        XCTAssertEqual(updated.timedSegments[0].sourceText, "原文")
-        XCTAssertFalse(updated.timedSegments[0].hasTranslation)
+        XCTAssertEqual(updated.sourceText, "改正原文")
+        XCTAssertEqual(updated.translatedText, "新译文")
+        XCTAssertEqual(updated.timedSegments, segments)
+        XCTAssertEqual(updated.manifest?.timelineFileName, "bilingual.srt")
+        XCTAssertEqual(updated.manifest?.timelineNeedsRealignment, true)
+
+        try repository.saveEdits(for: updated, sourceText: "改正原文", translatedText: "新译文")
+        let savedAgain = try XCTUnwrap(try repository.load().first)
+        XCTAssertEqual(savedAgain.timedSegments, segments)
+        XCTAssertEqual(savedAgain.manifest?.timelineNeedsRealignment, true)
+    }
+
+    func testSourceOnlyTimelineHasAnAccurateExportName() throws {
+        let repository = TranscriptRepository(currentDirectoryURL: currentURL)
+        _ = try repository.publish(
+            sourceText: "原文", translatedText: "整篇译文", sourceLanguage: nil,
+            targetLanguage: .english, provider: .rootify, modelName: "test", videoFileName: "test.mp4",
+            kind: .transcriptionTranslation,
+            timedSegments: [TimedTranscriptSegment(id: 1, startMilliseconds: 0, endMilliseconds: 1_000, sourceText: "原文")]
+        )
+        let saved = try XCTUnwrap(try repository.load().first)
+        XCTAssertEqual(saved.manifest?.timelineFileName, "source.srt")
+        XCTAssertEqual(saved.timedSegments.map(\.sourceText), ["原文"])
+        XCTAssertFalse(saved.timedSegments.first?.hasTranslation ?? true)
+    }
+
+    func testEditingWithUnreadableTimelineLeavesTheOriginalArtifactIntact() throws {
+        let repository = TranscriptRepository(currentDirectoryURL: currentURL)
+        let published = try repository.publish(
+            sourceText: "原文", translatedText: "译文", sourceLanguage: nil,
+            targetLanguage: .english, provider: .rootify, modelName: "test", videoFileName: "test.mp4",
+            kind: .transcriptionTranslation,
+            timedSegments: [TimedTranscriptSegment(id: 1, startMilliseconds: 0, endMilliseconds: 1_000, sourceText: "原文")]
+        )
+        let timelineURL = try XCTUnwrap(published.timelineFileURL)
+        let rawTimeline = "Unrecognized timeline content"
+        try rawTimeline.write(to: timelineURL, atomically: true, encoding: .utf8)
+        let saved = try XCTUnwrap(try repository.load().first)
+
+        XCTAssertThrowsError(try repository.saveEdits(for: saved, sourceText: "新原文", translatedText: "译文")) { error in
+            XCTAssertEqual(error as? TranscriptRepositoryError, .timelineUnavailable)
+        }
+        XCTAssertEqual(try repository.load().map(\.id), [saved.id])
+        XCTAssertEqual(try String(contentsOf: timelineURL, encoding: .utf8), rawTimeline)
+    }
+
+    @MainActor
+    func testReselectingAndSwitchingRecordsPreservesUnsavedDrafts() async throws {
+        let repository = TranscriptRepository(currentDirectoryURL: currentURL)
+        for name in ["first", "second"] {
+            _ = try repository.publish(
+                sourceText: name, translatedText: "译文", sourceLanguage: .english,
+                targetLanguage: .english, provider: .rootify, modelName: "test", videoFileName: "test.mp4",
+                kind: .transcriptionTranslation
+            )
+        }
+        let session = TranslationSessionStore(transcriptRepository: repository)
+        let first = try XCTUnwrap(session.savedTranscripts.first(where: { $0.sourceText == "first" }))
+        let second = try XCTUnwrap(session.savedTranscripts.first(where: { $0.sourceText == "second" }))
+        session.selectSavedTranscript(first.id)
+        session.savedDraftSourceText = "edited first"
+        session.savedDraftTranslationText = "一号草稿"
+        session.selectSavedTranscript(first.id)
+        XCTAssertEqual(session.savedDraftSourceText, "edited first")
+        session.selectSavedTranscript(second.id)
+        XCTAssertEqual(session.savedDraftSourceText, "second")
+        session.savedDraftSourceText = "edited second"
+        session.selectSavedTranscript(first.id)
+        XCTAssertEqual(session.savedDraftSourceText, "edited first")
+        XCTAssertEqual(session.savedDraftTranslationText, "一号草稿")
+        session.saveSelectedTranscriptEdits()
+        XCTAssertEqual(session.selectedSavedTranscript?.sourceText, "edited first")
+        session.selectSavedTranscript(second.id)
+        XCTAssertEqual(session.savedDraftSourceText, "edited second")
     }
 }
 

@@ -49,10 +49,16 @@ public enum EndpointValidator {
         guard components.query == nil && components.fragment == nil else {
             throw EndpointValidationError.queryOrFragmentNotAllowed
         }
+        if let port = components.port, !(1...65_535).contains(port) {
+            throw EndpointValidationError.invalidURL
+        }
 
         let scheme = (components.scheme ?? "").lowercased()
         if scheme == "https" {
-            return ValidatedEndpoint(url: url, origin: origin(from: components))
+            guard let origin = canonicalOrigin(for: url) else {
+                throw EndpointValidationError.invalidURL
+            }
+            return ValidatedEndpoint(url: url, origin: origin)
         }
 
         guard scheme == "http" else {
@@ -61,7 +67,18 @@ public enum EndpointValidator {
         guard allowLoopbackHTTP, isLoopback(host) else {
             throw EndpointValidationError.localHTTPNotAllowed
         }
-        return ValidatedEndpoint(url: url, origin: origin(from: components))
+        guard let origin = canonicalOrigin(for: url) else {
+            throw EndpointValidationError.invalidURL
+        }
+        return ValidatedEndpoint(url: url, origin: origin)
+    }
+
+    public static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let lhsOrigin = canonicalOrigin(for: lhs),
+              let rhsOrigin = canonicalOrigin(for: rhs) else {
+            return false
+        }
+        return lhsOrigin == rhsOrigin
     }
 
     private static func isLoopback(_ host: String) -> Bool {
@@ -72,11 +89,21 @@ public enum EndpointValidator {
             || normalized == "[::1]"
     }
 
-    private static func origin(from components: URLComponents) -> String {
-        let host = components.host ?? ""
+    private static func canonicalOrigin(for url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              let host = url.host?.lowercased(),
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.port.map({ (1...65_535).contains($0) }) ?? true else {
+            return nil
+        }
         let displayHost = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
-        var origin = "\(components.scheme?.lowercased() ?? "")://\(displayHost)"
-        if let port = components.port {
+        var origin = "\(scheme)://\(displayHost)"
+        let defaultPort = scheme == "https" ? 443 : 80
+        if let port = components.port, port != defaultPort {
             origin += ":\(port)"
         }
         return origin

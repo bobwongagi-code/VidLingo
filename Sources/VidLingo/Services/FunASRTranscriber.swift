@@ -106,10 +106,13 @@ struct FunASRTranscriber {
     }
 
     static func transcription(fromSSELines lines: [String]) throws -> FunASRTranscription {
-        var latestText = ""
+        var latestFullText = ""
+        var latestFallbackText = ""
+        var finalSentenceTexts = [Int: String]()
         var finalSegments = [Int: TimedTranscriptSegment]()
         var finalWords = [Int: [TimedTranscriptWord]]()
         var nextSegmentID = 1
+        let timestampLimit = Int(maxDurationSeconds * 1_000) + 1_000
 
         for line in lines {
             guard line.hasPrefix("data:") else { continue }
@@ -125,17 +128,21 @@ struct FunASRTranscriber {
                 throw FunASRTranscriptionError.invalidResponse
             }
 
-            let textCandidates = [
+            let fullTextCandidates = [
                 response.output?.text,
+                response.text
+            ]
+            if let text = nonEmptyText(from: fullTextCandidates) {
+                latestFullText = text
+            }
+
+            let fallbackTextCandidates = [
                 response.output?.output?.sentence?.text,
                 response.output?.sentence?.text,
                 response.sentence?.text,
-                response.text
             ]
-            if let text = textCandidates
-                .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
-                .first(where: { !$0.isEmpty }) {
-                latestText = text
+            if let text = nonEmptyText(from: fallbackTextCandidates) {
+                latestFallbackText = text
             }
 
             guard let sentence = response.output?.sentence
@@ -144,13 +151,19 @@ struct FunASRTranscriber {
                   sentence.sentenceEnd == true,
                   let text = sentence.text?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty else { continue }
+            let id = sentence.sentenceID ?? nextSegmentID
+            if id < Int.max { nextSegmentID = max(nextSegmentID, id + 1) }
+            finalSentenceTexts[id] = text
+            finalSegments.removeValue(forKey: id)
+            finalWords.removeValue(forKey: id)
 
             let sentenceWords = sentence.words?.compactMap { word -> TimedTranscriptWord? in
                 guard let wordText = word.text?.trimmingCharacters(in: .newlines),
                       !wordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       let wordBeginTime = word.beginTime,
                       let wordEndTime = word.endTime,
-                      wordEndTime >= wordBeginTime else { return nil }
+                      wordBeginTime >= 0, wordEndTime >= wordBeginTime,
+                      wordEndTime <= timestampLimit else { return nil }
                 return TimedTranscriptWord(
                     startMilliseconds: wordBeginTime,
                     endMilliseconds: wordEndTime,
@@ -160,10 +173,9 @@ struct FunASRTranscriber {
             } ?? []
             let beginTime = sentence.beginTime ?? sentenceWords.first?.startMilliseconds
             let endTime = sentence.endTime ?? sentenceWords.last?.endMilliseconds
-            guard let beginTime, let endTime, endTime >= beginTime else { continue }
+            guard let beginTime, let endTime, beginTime >= 0,
+                  endTime >= beginTime, endTime <= timestampLimit else { continue }
 
-            let id = sentence.sentenceID ?? nextSegmentID
-            nextSegmentID = max(nextSegmentID, id + 1)
             finalSegments[id] = TimedTranscriptSegment(
                 id: id,
                 startMilliseconds: beginTime,
@@ -179,20 +191,114 @@ struct FunASRTranscriber {
         let orderedWords = finalWords
             .sorted { $0.key < $1.key }
             .flatMap(\.value)
-        let segments: [TimedTranscriptSegment]
+        let sentenceSegments = finalSegments.values.sorted {
+            if $0.startMilliseconds == $1.startMilliseconds {
+                return $0.id < $1.id
+            }
+            return $0.startMilliseconds < $1.startMilliseconds
+        }
+        let sentenceText = finalSentenceTexts
+            .sorted { $0.key < $1.key }
+            .map(\.value)
+            .joined(separator: " ")
         let text: String
-        if !orderedWords.isEmpty {
-            segments = TimedTranscriptSegmenter.segment(orderedWords)
-            text = TimedTranscriptSegmenter.renderText(from: orderedWords)
+        if !latestFullText.isEmpty {
+            text = latestFullText
+        } else if !sentenceText.isEmpty {
+            text = sentenceText
+        } else if !latestFallbackText.isEmpty {
+            text = latestFallbackText
         } else {
-            segments = finalSegments.values.sorted { $0.startMilliseconds < $1.startMilliseconds }
-            text = latestText.isEmpty ? segments.map(\.sourceText).joined(separator: " ") : latestText
+            text = ""
+        }
+
+        let segments: [TimedTranscriptSegment]
+        let hasWordTimestamps: Bool
+        let wordSegments = TimedTranscriptSegmenter.segment(orderedWords)
+        if timelineCoversTranscript(wordSegments.map(\.sourceText).joined(separator: " "), transcriptText: text) {
+            segments = wordSegments
+            hasWordTimestamps = true
+        } else if timelineCoversTranscript(sentenceSegments.map(\.sourceText).joined(separator: " "), transcriptText: text) {
+            segments = sentenceSegments
+            hasWordTimestamps = false
+        } else {
+            segments = []
+            hasWordTimestamps = false
         }
         return FunASRTranscription(
             text: text,
             segments: segments,
-            hasWordTimestamps: !orderedWords.isEmpty
+            hasWordTimestamps: hasWordTimestamps
         )
+    }
+
+    private static func nonEmptyText(from candidates: [String?]) -> String? {
+        candidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private static func timelineCoversTranscript(_ timelineText: String, transcriptText: String) -> Bool {
+        let timelineContent = normalizedSpeechContent(timelineText)
+        let transcriptContent = normalizedSpeechContent(transcriptText)
+        guard !transcriptContent.isEmpty else { return false }
+        return timelineContent == transcriptContent
+            && numericTokens(in: timelineText) == numericTokens(in: transcriptText)
+    }
+
+    private static func normalizedSpeechContent(_ text: String) -> String {
+        let contentCharacters = CharacterSet.alphanumerics
+        let nonBaseCharacters = CharacterSet.nonBaseCharacters
+        let normalizedText = text
+            .precomposedStringWithCanonicalMapping
+            .lowercased()
+        var result = ""
+        var hasPreviousCharacter = false
+        var previousNeedsWordBoundary = false
+        var hasPendingBoundary = false
+
+        for scalar in normalizedText.unicodeScalars {
+            if contentCharacters.contains(scalar) {
+                let needsWordBoundary = !isUnsegmentedScript(scalar)
+                if hasPendingBoundary,
+                   hasPreviousCharacter,
+                   previousNeedsWordBoundary,
+                   needsWordBoundary {
+                    result.append("|")
+                }
+                result.unicodeScalars.append(scalar)
+                hasPreviousCharacter = true
+                previousNeedsWordBoundary = needsWordBoundary
+                hasPendingBoundary = false
+            } else if nonBaseCharacters.contains(scalar) {
+                result.unicodeScalars.append(scalar)
+            } else {
+                hasPendingBoundary = true
+            }
+        }
+        return result
+    }
+
+    private static func numericTokens(in text: String) -> [String] {
+        text.matches(of: /[+\-−]?\s*\p{Nd}+(?:[.,\/:\-٫٬]\s*\p{Nd}+)*[%٪‰]?/).map { match in
+            String(match.output.filter { !$0.isWhitespace }).replacingOccurrences(of: "−", with: "-")
+        }
+    }
+
+    private static func isUnsegmentedScript(_ scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        return (0x0E00...0x0EFF).contains(value)
+            || (0x1000...0x109F).contains(value)
+            || (0x1780...0x17FF).contains(value)
+            || (0x3040...0x30FF).contains(value)
+            || (0x3100...0x312F).contains(value)
+            || (0x31A0...0x31BF).contains(value)
+            || (0x31F0...0x31FF).contains(value)
+            || (0x3400...0x4DBF).contains(value)
+            || (0x4E00...0x9FFF).contains(value)
+            || (0xAC00...0xD7AF).contains(value)
+            || (0xF900...0xFAFF).contains(value)
+            || (0x20000...0x323AF).contains(value)
     }
 
     static func requestData(

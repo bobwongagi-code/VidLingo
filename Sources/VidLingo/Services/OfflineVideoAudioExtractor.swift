@@ -4,6 +4,7 @@ enum OfflineVideoAudioExtractor {
     static func extractSpeechAudio(
         from videoURL: URL,
         videoDuration: Double,
+        audioTrackIndex: Int,
         token: ProcessCancellationToken
     ) async throws -> URL {
         try await AsyncOperationTimeout.run(
@@ -15,6 +16,7 @@ enum OfflineVideoAudioExtractor {
             try extractSpeechAudioSynchronously(
                 from: videoURL,
                 videoDuration: videoDuration,
+                audioTrackIndex: audioTrackIndex,
                 token: token
             )
         }
@@ -23,6 +25,7 @@ enum OfflineVideoAudioExtractor {
     private static func extractSpeechAudioSynchronously(
         from videoURL: URL,
         videoDuration: Double,
+        audioTrackIndex: Int,
         token: ProcessCancellationToken
     ) throws -> URL {
         try token.check()
@@ -50,6 +53,7 @@ enum OfflineVideoAudioExtractor {
             "-loglevel", "error",
             "-y",
             "-i", videoURL.path(percentEncoded: false),
+            "-map", "0:a:\(audioTrackIndex)",
             "-vn",
             // 高低通 + 响度标准化让人声更稳定；不加 afftdn 激进降噪，它会吃掉人声反而更糟。
             // 不补开头静音：实测 adelay 会让泰语首段冒出词间空格，而开头漂移已由中性 initial prompt 解决。
@@ -71,6 +75,7 @@ enum OfflineVideoAudioExtractor {
             "-loglevel", "error",
             "-y",
             "-i", videoURL.path(percentEncoded: false),
+            "-map", "0:a:\(audioTrackIndex)",
             "-vn",
             "-af", durationLimitFilter,
             "-ar", "16000",
