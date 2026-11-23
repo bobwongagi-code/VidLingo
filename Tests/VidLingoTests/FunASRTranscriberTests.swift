@@ -102,6 +102,107 @@ final class FunASRTranscriberTests: XCTestCase {
         XCTAssertTrue(result.segments.isEmpty)
     }
 
+    func testPartialSentenceTimelineDoesNotReplaceTheFullTranscript() throws {
+        let lines = [
+            #"data:{"output":{"text":"The bag is light. Click the link below.","sentence":{"sentence_id":2,"sentence_end":true,"begin_time":2400,"end_time":3900,"text":"Click the link below."}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "The bag is light. Click the link below.")
+        XCTAssertTrue(result.segments.isEmpty)
+        XCTAssertFalse(result.hasWordTimestamps)
+    }
+
+    func testPartialWordTimelineDoesNotReplaceTheFullTranscript() throws {
+        let lines = [
+            #"data:{"output":{"text":"The bag is light. Click the link below.","output":{"sentence":{"sentence_id":2,"sentence_end":true,"begin_time":2400,"end_time":3900,"text":"Click the link below.","words":[{"begin_time":2400,"end_time":3900,"text":"Click the link below"}]}}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "The bag is light. Click the link below.")
+        XCTAssertTrue(result.segments.isEmpty)
+        XCTAssertFalse(result.hasWordTimestamps)
+    }
+
+    func testNestedSentenceFallbackKeepsItsCompleteTimeline() throws {
+        let lines = [
+            #"data:{"output":{"output":{"sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"完整的嵌套转写。"}}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "完整的嵌套转写。")
+        XCTAssertEqual(result.segments.map(\.sourceText), ["完整的嵌套转写。"])
+        XCTAssertFalse(result.hasWordTimestamps)
+    }
+
+    func testSentenceFallbackKeepsEarlierUntimedFinalSentences() throws {
+        let lines = [
+            #"data:{"output":{"sentence":{"sentence_id":1,"sentence_end":true,"text":"I like this bag."}}}"#,
+            #"data:{"output":{"sentence":{"sentence_id":2,"sentence_end":true,"begin_time":2400,"end_time":3900,"text":"It feels light."}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "I like this bag. It feels light.")
+        XCTAssertTrue(result.segments.isEmpty)
+        XCTAssertFalse(result.hasWordTimestamps)
+    }
+
+    func testInvalidTimestampAndExtremeSentenceIDStillKeepFullText() throws {
+        let lines = [
+            #"data:{"output":{"text":"Two words.","sentence":{"sentence_id":9223372036854775807,"sentence_end":true,"begin_time":9223372036854775800,"end_time":9223372036854775807,"text":"Two words.","words":[{"begin_time":9223372036854775800,"end_time":9223372036854775802,"text":"Two"},{"begin_time":9223372036854775803,"end_time":9223372036854775807,"text":" words."}]}}}"#
+        ]
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+        XCTAssertEqual(result.text, "Two words.")
+        XCTAssertTrue(result.segments.isEmpty)
+        XCTAssertFalse(result.hasWordTimestamps)
+    }
+
+    func testSentenceTimelineMustPreserveLatinWordBoundaries() throws {
+        let lines = [
+            #"data:{"output":{"text":"The product is now here.","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"The product is nowhere."}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "The product is now here.")
+        XCTAssertTrue(result.segments.isEmpty)
+    }
+
+    func testNumericPunctuationMustMatchBeforeKeepingSentenceTimeline() throws {
+        let exactLines = [
+            #"data:{"output":{"text":"Price is RM 1.99.","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"Price is RM 1.99."}}}"#
+        ]
+        let changedPriceLines = [
+            #"data:{"output":{"text":"Price is RM 1.99.","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"Price is RM 199."}}}"#
+        ]
+        let changedSignLines = [
+            #"data:{"output":{"text":"The temperature is -5 degrees.","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"The temperature is 5 degrees."}}}"#
+        ]
+
+        let exact = try FunASRTranscriber.transcription(fromSSELines: exactLines)
+        let changedPrice = try FunASRTranscriber.transcription(fromSSELines: changedPriceLines)
+        let changedSign = try FunASRTranscriber.transcription(fromSSELines: changedSignLines)
+
+        XCTAssertEqual(exact.segments.map(\.sourceText), ["Price is RM 1.99."])
+        XCTAssertTrue(changedPrice.segments.isEmpty)
+        XCTAssertTrue(changedSign.segments.isEmpty)
+    }
+
+    func testSentenceTimelineAllowsUnspacedScriptSegmentationDifferences() throws {
+        let lines = [
+            #"data:{"output":{"text":"这个背包很好用。","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":1800,"text":"这 个 背 包 很 好 用 。"}}}"#
+        ]
+
+        let result = try FunASRTranscriber.transcription(fromSSELines: lines)
+
+        XCTAssertEqual(result.text, "这个背包很好用。")
+        XCTAssertEqual(result.segments.map(\.sourceText), ["这 个 背 包 很 好 用 。"])
+    }
+
     func testParsesWordTimestampsIntoMultipleSegments() throws {
         let lines = [
             #"data:{"output":{"text":"第一句 第二句 第三句 第四句","sentence":{"sentence_id":1,"sentence_end":true,"begin_time":0,"end_time":9000,"text":"第一句 第二句 第三句 第四句","words":[{"begin_time":0,"end_time":1800,"text":"第一句","punctuation":"。"},{"begin_time":2200,"end_time":3900,"text":"第二句","punctuation":"。"},{"begin_time":4500,"end_time":6200,"text":"第三句","punctuation":""},{"begin_time":7000,"end_time":9000,"text":"第四句","punctuation":"。"}]}}}"#
@@ -109,6 +210,7 @@ final class FunASRTranscriberTests: XCTestCase {
 
         let result = try FunASRTranscriber.transcription(fromSSELines: lines)
 
+        XCTAssertEqual(result.text, "第一句 第二句 第三句 第四句")
         XCTAssertGreaterThan(result.segments.count, 1)
         XCTAssertTrue(result.hasWordTimestamps)
         XCTAssertEqual(result.segments.map(\.sourceText).joined(), "第一句。第二句。第三句第四句。")

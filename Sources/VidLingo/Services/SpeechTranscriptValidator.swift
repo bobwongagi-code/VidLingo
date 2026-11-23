@@ -6,11 +6,10 @@ enum SpeechTranscriptValidator {
         let hasSpeechCharacters = normalizedText.unicodeScalars.contains {
             CharacterSet.letters.contains($0) || CharacterSet.decimalDigits.contains($0)
         }
-        guard hasSpeechCharacters else { return false }
-
         let loopText = normalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hasSpeechCharacters, loopText != "*trips*", loopText != "trips trips" else { return false }
+
         if usesUnspacedScript(language, text: loopText) {
-            if containsKnownHallucination(in: loopText) { return false }
             return !isRepetitionLoop(loopText)
         }
 
@@ -31,7 +30,7 @@ enum SpeechTranscriptValidator {
             return false
         }
 
-        return !containsKnownHallucination(in: normalizedText)
+        return true
     }
 
     private static func usesUnspacedScript(_ language: LanguageOption, text: String) -> Bool {
@@ -64,13 +63,4 @@ enum SpeechTranscriptValidator {
         return Double(grams.count) / Double(total) < 0.25
     }
 
-    private static func containsKnownHallucination(in text: String) -> Bool {
-        [
-            "*trips*",
-            "trips trips",
-            "do you know how to put the person in it",
-            "you can see the person in it",
-            "i can see the person in it"
-        ].contains(where: text.contains)
-    }
 }

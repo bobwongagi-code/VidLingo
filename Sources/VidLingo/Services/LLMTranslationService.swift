@@ -33,28 +33,40 @@ actor LLMTranslationService {
         let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { throw LLMTranslationError.missingModel }
 
-        guard let apiKey = try TranslationAPIKeyStore.readAPIKey(for: provider), !apiKey.isEmpty else {
-            throw LLMTranslationError.missingAPIKey(provider.title)
-        }
-
         let endpointText = provider == .custom ? customBaseURL : provider.defaultBaseURL
         let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
-        let endpoint: URL
+        let validatedEndpoint: ValidatedEndpoint
         do {
-            endpoint = try EndpointValidator.validate(
+            validatedEndpoint = try EndpointValidator.validate(
                 endpointText,
                 allowLoopbackHTTP: provider == .custom && allowLocalHTTP
-            ).url
+            )
         } catch {
             throw LLMTranslationError.invalidEndpoint
         }
 
-        var request = URLRequest(url: endpoint)
+        let customEndpoint = provider == .custom ? validatedEndpoint : nil
+        guard let apiKey = try TranslationAPIKeyStore.readAPIKey(
+            for: provider,
+            customEndpoint: customEndpoint
+        ), !apiKey.isEmpty else {
+            throw LLMTranslationError.missingAPIKey(provider.title)
+        }
+
+        return (Self.authenticatedRequest(endpoint: validatedEndpoint, apiKey: apiKey, timeout: timeout), model)
+    }
+
+    static func authenticatedRequest(
+        endpoint: ValidatedEndpoint,
+        apiKey: String,
+        timeout: TimeInterval
+    ) -> URLRequest {
+        var request = URLRequest(url: endpoint.url)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        return (request, model)
+        return request
     }
 
     // MARK: - 公开 API
@@ -166,8 +178,7 @@ actor LLMTranslationService {
     ) async throws -> TimedTranscriptTranslation {
         guard !text.isEmpty, !timedSegments.isEmpty,
               Self.supportsTimedTranslation(provider: provider, modelName: modelName),
-              timedSegments.count <= 80,
-              timedSegments.reduce(0, { $0 + $1.sourceText.count }) <= 12_000 else {
+              let batches = Self.timedTranslationBatches(timedSegments) else {
             return try await fallbackTimedTranslation(
                 text,
                 source: source,
@@ -187,26 +198,64 @@ actor LLMTranslationService {
             customBaseURL: customBaseURL,
             timeout: RequestTimeout.transcriptTranslation
         )
-        let configuration = timedTranslationRequestConfiguration(
-            timedSegments,
-            source: source,
-            target: target,
-            productContext: productContext
-        )
-        let output = try await adapter(for: provider).sendText(
-            request: request,
-            model: model,
-            system: configuration.system,
-            userText: configuration.userText,
-            options: LLMGenerationOptions(
-                temperature: 0.2,
-                maxTokens: 2_500
-            ),
-            provider: provider
-        )
-        try token.check()
+        let adapter = adapter(for: provider)
+        return try await Self.translateTimedBatches(batches, token: token) { batch in
+            let configuration = timedTranslationRequestConfiguration(
+                batch,
+                source: source,
+                target: target,
+                productContext: productContext
+            )
+            return try await adapter.sendText(
+                request: request,
+                model: model,
+                system: configuration.system,
+                userText: configuration.userText,
+                options: LLMGenerationOptions(temperature: 0.2, maxTokens: 2_500),
+                provider: provider
+            )
+        }
+    }
 
-        return try Self.alignTimedTranslations(from: output, to: timedSegments)
+    static func translateTimedBatches(
+        _ batches: [[TimedTranscriptSegment]],
+        token: ProcessCancellationToken,
+        isolation: isolated (any Actor)? = #isolation,
+        send: ([TimedTranscriptSegment]) async throws -> String
+    ) async throws -> TimedTranscriptTranslation {
+        var translatedSegments: [TimedTranscriptSegment] = []
+        for batch in batches {
+            try token.check()
+            let output = try await send(batch)
+            try token.check()
+            translatedSegments += try Self.alignTimedTranslations(from: output, to: batch).segments
+        }
+        return TimedTranscriptTranslation(
+            text: translatedSegments.compactMap(\.translatedText).joined(separator: "\n"),
+            segments: translatedSegments
+        )
+    }
+
+    static func timedTranslationBatches(_ segments: [TimedTranscriptSegment]) -> [[TimedTranscriptSegment]]? {
+        let maximumSegments = 80
+        let maximumCharacters = 12_000
+        guard Set(segments.map(\.id)).count == segments.count else { return nil }
+        var batches: [[TimedTranscriptSegment]] = []
+        var batch: [TimedTranscriptSegment] = []
+        var characterCount = 0
+        for segment in segments {
+            let length = segment.sourceText.count
+            guard length <= maximumCharacters else { return nil }
+            if batch.count == maximumSegments || characterCount + length > maximumCharacters {
+                batches.append(batch)
+                batch = []
+                characterCount = 0
+            }
+            batch.append(segment)
+            characterCount += length
+        }
+        if !batch.isEmpty { batches.append(batch) }
+        return batches
     }
 
     static func supportsTimedTranslation(provider: TranslationProviderID, modelName: String) -> Bool {

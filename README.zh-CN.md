@@ -43,6 +43,7 @@ Custom         用户填写的 OpenAI-compatible chat completions URL（HTTPS）
 自定义 endpoint 不能包含查询参数或 URL fragment；凭证应填写在服务对应的 API key 字段中。响应支持 `choices[].message.content`、内容块数组、`choices[].text`、顶层 `output_text`，以及包含文本的 `output` 结构。
 
 API key 按服务分别保存在 macOS Keychain 中，只读取 VidLingo 自己的密钥项。
+自定义服务的密钥按协议、主机和端口分别保存。从使用单个自定义密钥的版本升级后，请为当前服务地址重新保存密钥。
 
 
 Fun-ASR 使用工作空间对应的原生接口，请将 `<workspace-id>` 替换为你自己的部署 ID：
@@ -73,6 +74,8 @@ Resources/TranslationSystemPrompt.md
 ```text
 ~/Library/Application Support/VidLingo/Transcripts/
 ```
+
+可用的字幕按实际内容保存为 `bilingual.srt`（双语）、`source.srt`（仅原文）或 `partial.srt`（部分字幕有译文）。编辑文稿后，原字幕仍可在资料库中查看和复制，并会标明待重新对齐。
 
 ## 构建和验证
 

@@ -6,6 +6,7 @@ struct TimelineTranscriptPane: View {
     let segments: [TimedTranscriptSegment]
     let fallbackTranslation: String
     let seekPreview: ((Int) -> Void)?
+    var needsRealignment = false
     @State private var isCopyFeedbackVisible = false
 
     private var hasSegmentTranslations: Bool {
@@ -13,10 +14,17 @@ struct TimelineTranscriptPane: View {
     }
 
     private var description: String {
+        if needsRealignment { return AppText.timelineNeedsRealignment }
         guard hasSegmentTranslations else { return AppText.timelineFallbackDescription }
         return seekPreview == nil
             ? AppText.savedTimelineDescription
             : AppText.timelineDescription
+    }
+
+    private var copyLabel: String {
+        if needsRealignment { return AppText.copyPreviousTimeline }
+        if hasSegmentTranslations { return AppText.copyTimeline }
+        return segments.contains(where: \.hasTranslation) ? AppText.copyPartialTimeline : AppText.copySourceTimeline
     }
 
     var body: some View {
@@ -37,7 +45,8 @@ struct TimelineTranscriptPane: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help(AppText.copyTimeline)
+                .help(copyLabel)
+                .accessibilityLabel(copyLabel)
             }
 
             ScrollView {

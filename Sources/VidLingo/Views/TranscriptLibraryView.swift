@@ -161,7 +161,8 @@ struct TranscriptLibraryView: View {
                         TimelineTranscriptPane(
                             segments: selectedTranscript.timedSegments,
                             fallbackTranslation: selectedTranscript.translatedText ?? "",
-                            seekPreview: nil
+                            seekPreview: nil,
+                            needsRealignment: selectedTranscript.manifest?.timelineNeedsRealignment == true
                         )
                         .tabItem {
                             Label(AppText.savedTimelineTab, systemImage: "clock")

@@ -2,6 +2,16 @@ import XCTest
 @testable import VidLingo
 
 final class SpeechTranscriptValidatorTests: XCTestCase {
+    func testAcceptsCameraDemoContainingAnOrdinaryEnglishPhrase() {
+        XCTAssertTrue(SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
+            "Turn the camera on and you can see the person in it. This model records clearly at night.",
+            language: .english
+        ))
+        XCTAssertFalse(SpeechTranscriptValidator.hasEffectiveSpeechTranscript(
+            Array(repeating: "you can see the person in it", count: 5).joined(separator: "\n"),
+            language: .english
+        ))
+    }
     func testAcceptsShortEnglishAndMalayUtterances() throws {
         let malay = try XCTUnwrap(LanguageOption.supported.first { $0.id == "ms-MY" })
 

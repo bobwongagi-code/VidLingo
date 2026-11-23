@@ -37,6 +37,19 @@ final class APIKeyAvailabilityStateTests: XCTestCase {
         XCTAssertEqual(state.value, .missing)
     }
 
+    func testEndpointScopeRefreshRejectsAvailabilityFromPreviousOrigin() {
+        var state = APIKeyAvailabilityState()
+        state.set(.configured)
+        let previousOriginRevision = state.beginRefresh(reset: true)
+        let currentOriginRevision = state.beginRefresh(reset: true)
+
+        state.apply(.configured, revision: previousOriginRevision)
+
+        XCTAssertEqual(state.value, .missing)
+        state.apply(.missing, revision: currentOriginRevision)
+        XCTAssertEqual(state.value, .missing)
+    }
+
     func testTranslationMutationDoesNotDiscardASRRefresh() {
         var translation = APIKeyAvailabilityState()
         var asr = APIKeyAvailabilityState()

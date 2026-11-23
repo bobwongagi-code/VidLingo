@@ -42,12 +42,26 @@ final class TranslationSessionStore {
         didSet { persistTranslationModelName() }
     }
     var customTranslationBaseURL = "" {
-        didSet { persistSelectedSettings() }
+        didSet {
+            persistSelectedSettings()
+            guard !isRestoringSelectedSettings,
+                  translationProvider == .custom,
+                  Self.translationCredentialIdentity(provider: .custom, customEndpointText: oldValue) != translationCredentialIdentity else {
+                return
+            }
+            refreshTranslationAPIKeyAvailability()
+        }
     }
     private var translationAPIKeyState = APIKeyAvailabilityState()
     var translationAPIKeyAvailability: KeychainAvailability {
         get { translationAPIKeyState.value }
         set { translationAPIKeyState.set(newValue) }
+    }
+    var translationCredentialIdentity: String {
+        Self.translationCredentialIdentity(
+            provider: translationProvider,
+            customEndpointText: customTranslationBaseURL
+        )
     }
     var hasTranslationAPIKey: Bool { translationAPIKeyAvailability == .configured }
     private var funASRAPIKeyState = APIKeyAvailabilityState()
@@ -73,12 +87,14 @@ final class TranslationSessionStore {
     var offlineVideoURL: URL?
     var offlineVideoFileName = ""
     var offlineVideoDurationText = ""
+    private var offlineVideoHasAudio: Bool?
     var isOfflineVideoProcessing = false
     var isProductContextInferenceEnabled = true
     var savedTranscripts: [SavedTranscript] = []
     var selectedSavedTranscriptID: String?
     var savedDraftSourceText = ""
     var savedDraftTranslationText = ""
+    private var draftTextByTranscriptID: [String: (source: String, translation: String)] = [:]
 
     var offlineVideoExecutionPlan: String {
         var steps = ["本地提取音频"]
@@ -105,23 +121,32 @@ final class TranslationSessionStore {
     }
 
     var offlineTranslationConfigurationWarning: String? {
-        guard funASRAPIKeyAvailability == .configured else {
-            return AppText.funASRKeyConfigurationWarning(funASRAPIKeyAvailability)
+        if offlineVideoHasAudio == false {
+            guard allowsCloudVideoFrames, allowsVisualSalesCopy else {
+                return AppText.videoOnlyNeedsVisualPermissions
+            }
+            guard LLMTranslationService.supportsProductContextFrames(provider: translationProvider, modelName: translationModelName) else {
+                return AppText.videoOnlyNeedsVisionModel
+            }
+        } else {
+            guard funASRAPIKeyAvailability == .configured else {
+                return AppText.funASRKeyConfigurationWarning(funASRAPIKeyAvailability)
+            }
+            guard allowsCloudAudioTranscription else {
+                return AppText.cloudAudioConsentRequired
+            }
         }
-        guard allowsCloudAudioTranscription else {
-            return AppText.cloudAudioConsentRequired
+        if translationProvider == .custom, validatedCustomTranslationEndpoint == nil {
+            return AppText.translationEndpointInvalid
         }
         guard translationAPIKeyAvailability == .configured else {
+            if translationProvider == .custom, translationAPIKeyAvailability == .missing {
+                return AppText.customEndpointAPIKeyMissing
+            }
             return AppText.keychainAvailabilityText(translationAPIKeyAvailability)
         }
         guard !translationModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return AppText.translationModelMissing
-        }
-        if translationProvider == .custom {
-            let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
-            if (try? EndpointValidator.validate(customTranslationBaseURL, allowLoopbackHTTP: allowLocalHTTP)) == nil {
-                return AppText.translationEndpointInvalid
-            }
         }
         return nil
     }
@@ -131,6 +156,7 @@ final class TranslationSessionStore {
     }
 
     private var isRestoringSelectedSettings = false
+    private var videoInspectionTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
     private var processingToken: ProcessCancellationToken?
     private let transcriptRepository: TranscriptRepository
@@ -155,10 +181,18 @@ final class TranslationSessionStore {
         offlineVideoURL = videoURL
         offlineVideoFileName = videoURL.lastPathComponent
         offlineVideoDurationText = ""
+        offlineVideoHasAudio = nil
         statusMessage = AppText.confirmVideoContent
 
-        Task { @MainActor in
-            offlineVideoDurationText = await OfflineTranslationCoordinator.formattedVideoDuration(for: videoURL)
+        videoInspectionTask?.cancel()
+        videoInspectionTask = Task { @MainActor [weak self] in
+            let didAccess = videoURL.startAccessingSecurityScopedResource()
+            defer { if didAccess { videoURL.stopAccessingSecurityScopedResource() } }
+            let metadata = await OfflineTranslationCoordinator.previewMetadata(for: videoURL)
+            guard !Task.isCancelled, let self, self.offlineVideoURL == videoURL else { return }
+            self.offlineVideoDurationText = metadata.durationText
+            self.offlineVideoHasAudio = metadata.hasAudio
+            self.videoInspectionTask = nil
         }
     }
 
@@ -305,10 +339,21 @@ final class TranslationSessionStore {
     }
 
     func saveTranslationAPIKey(_ key: String) {
+        let provider = translationProvider
+        let customEndpoint = provider == .custom ? validatedCustomTranslationEndpoint : nil
+        guard provider != .custom || customEndpoint != nil else {
+            translationAPIKeyAvailability = .missing
+            statusMessage = AppText.translationEndpointInvalid
+            return
+        }
         do {
-            try TranslationAPIKeyStore.saveAPIKey(key, for: translationProvider)
+            try TranslationAPIKeyStore.saveAPIKey(
+                key,
+                for: provider,
+                customEndpoint: customEndpoint
+            )
             translationAPIKeyAvailability = .configured
-            statusMessage = AppText.translationAPIKeySaved(translationProvider.title)
+            statusMessage = AppText.translationAPIKeySaved(provider.title)
         } catch let error as TranslationAPIKeyStoreError {
             translationAPIKeyAvailability = error.availability
             statusMessage = error.localizedDescription
@@ -318,10 +363,20 @@ final class TranslationSessionStore {
     }
 
     func removeTranslationAPIKey() {
-        do {
-            try TranslationAPIKeyStore.deleteAPIKey(for: translationProvider)
+        let provider = translationProvider
+        let customEndpoint = provider == .custom ? validatedCustomTranslationEndpoint : nil
+        guard provider != .custom || customEndpoint != nil else {
             translationAPIKeyAvailability = .missing
-            statusMessage = AppText.translationAPIKeyRemoved(translationProvider.title)
+            statusMessage = AppText.translationEndpointInvalid
+            return
+        }
+        do {
+            try TranslationAPIKeyStore.deleteAPIKey(
+                for: provider,
+                customEndpoint: customEndpoint
+            )
+            translationAPIKeyAvailability = .missing
+            statusMessage = AppText.translationAPIKeyRemoved(provider.title)
         } catch let error as TranslationAPIKeyStoreError {
             translationAPIKeyAvailability = error.availability
             statusMessage = error.localizedDescription
@@ -384,9 +439,8 @@ final class TranslationSessionStore {
         }
         do {
             try reloadSavedTranscripts()
-            if let transcriptID,
-               savedTranscripts.contains(where: { $0.id == transcriptID }) {
-                selectSavedTranscript(transcriptID)
+            if transcriptID != nil, let transcript = selectedSavedTranscript {
+                restoreDraftText(for: transcript)
             }
             return true
         } catch {
@@ -401,15 +455,33 @@ final class TranslationSessionStore {
     }
 
     func selectSavedTranscript(_ id: String) {
-        guard let transcript = savedTranscripts.first(where: { $0.id == id }) else { return }
+        guard id != selectedSavedTranscriptID,
+              let transcript = savedTranscripts.first(where: { $0.id == id }) else { return }
+        rememberSelectedDraftText()
         selectedSavedTranscriptID = id
-        savedDraftSourceText = transcript.sourceText
-        savedDraftTranslationText = transcript.translatedText ?? ""
+        restoreDraftText(for: transcript)
+    }
+
+    private func rememberSelectedDraftText() {
+        guard let transcript = selectedSavedTranscript else { return }
+        if savedDraftSourceText == transcript.sourceText,
+           savedDraftTranslationText == transcript.translatedText ?? "" {
+            draftTextByTranscriptID.removeValue(forKey: transcript.id)
+        } else {
+            draftTextByTranscriptID[transcript.id] = (savedDraftSourceText, savedDraftTranslationText)
+        }
+    }
+
+    private func restoreDraftText(for transcript: SavedTranscript) {
+        let draft = draftTextByTranscriptID[transcript.id]
+        savedDraftSourceText = draft?.source ?? transcript.sourceText
+        savedDraftTranslationText = draft?.translation ?? transcript.translatedText ?? ""
     }
 
     func saveSelectedTranscriptEdits() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
         var publishedRecordID: String?
+        var previousRecordMayRemain = false
         do {
             publishedRecordID = try transcriptRepository.saveEdits(
                 for: selectedTranscript,
@@ -420,20 +492,30 @@ final class TranslationSessionStore {
         } catch let error as TranscriptRepositoryError {
             if case let .savedButRetirementFailed(recordID, _) = error {
                 publishedRecordID = recordID
-                statusMessage = error.localizedDescription
+                previousRecordMayRemain = true
+                statusMessage = AppText.savedEdits
             } else {
                 statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
             }
         } catch {
             statusMessage = AppText.saveLibraryFailed(error.localizedDescription)
         }
-        _ = loadSavedTranscripts(selecting: publishedRecordID)
+        if publishedRecordID != nil {
+            draftTextByTranscriptID.removeValue(forKey: selectedTranscript.id)
+        }
+        let reloaded = loadSavedTranscripts(selecting: publishedRecordID)
+        if publishedRecordID != nil, !reloaded {
+            statusMessage = AppText.savedEditsLibraryRefreshFailed
+        } else if previousRecordMayRemain, savedTranscripts.contains(where: { $0.id == selectedTranscript.id }) {
+            statusMessage = AppText.savedEditsPreviousCopyRemains
+        }
     }
 
     func deleteSelectedTranscript() {
         guard let selectedTranscript = selectedSavedTranscript else { return }
         do {
             try transcriptRepository.delete(selectedTranscript)
+            draftTextByTranscriptID.removeValue(forKey: selectedTranscript.id)
             statusMessage = AppText.deletedSavedTranscript
             selectedSavedTranscriptID = nil
             savedDraftSourceText = ""
@@ -445,7 +527,11 @@ final class TranslationSessionStore {
     }
 
     func deleteAllSavedTranscripts() {
+        rememberSelectedDraftText()
         let result = transcriptRepository.deleteAllCurrent(savedTranscripts)
+        for id in result.deletedIDs {
+            draftTextByTranscriptID.removeValue(forKey: id)
+        }
         selectedSavedTranscriptID = nil
         savedDraftSourceText = ""
         savedDraftTranslationText = ""
@@ -521,20 +607,56 @@ final class TranslationSessionStore {
     }
 
     private func refreshAPIKeyAvailabilities() {
-        let provider = translationProvider
-        let translationRevision = translationAPIKeyState.beginRefresh(reset: true)
+        refreshTranslationAPIKeyAvailability()
+
         let funASRRevision = funASRAPIKeyState.beginRefresh(reset: false)
         Task { @MainActor [weak self] in
-            let availabilities = await Task.detached(priority: .utility) {
-                (
-                    TranslationAPIKeyStore.availability(for: provider),
-                    TranslationAPIKeyStore.availability(service: FunASRConfiguration.keychainService)
+            let availability = await Task.detached(priority: .utility) {
+                TranslationAPIKeyStore.availability(service: FunASRConfiguration.keychainService)
+            }.value
+            guard let self else { return }
+            self.funASRAPIKeyState.apply(availability, revision: funASRRevision)
+        }
+    }
+
+    private func refreshTranslationAPIKeyAvailability() {
+        let provider = translationProvider
+        let endpoint = provider == .custom ? validatedCustomTranslationEndpoint : nil
+        let identity = translationCredentialIdentity
+        let translationRevision = translationAPIKeyState.beginRefresh(reset: true)
+        guard provider != .custom || endpoint != nil else { return }
+        Task { @MainActor [weak self] in
+            let availability = await Task.detached(priority: .utility) {
+                TranslationAPIKeyStore.availability(
+                    for: provider,
+                    customEndpoint: endpoint
                 )
             }.value
-            guard let self, self.translationProvider == provider else { return }
-            self.translationAPIKeyState.apply(availabilities.0, revision: translationRevision)
-            self.funASRAPIKeyState.apply(availabilities.1, revision: funASRRevision)
+            guard let self, self.translationCredentialIdentity == identity else { return }
+            self.translationAPIKeyState.apply(availability, revision: translationRevision)
         }
+    }
+
+    private var validatedCustomTranslationEndpoint: ValidatedEndpoint? {
+        Self.validatedCustomEndpoint(from: customTranslationBaseURL)
+    }
+
+    private static func translationCredentialIdentity(
+        provider: TranslationProviderID,
+        customEndpointText: String
+    ) -> String {
+        guard provider == .custom else {
+            return "provider:\(provider.rawValue)"
+        }
+        guard let endpoint = validatedCustomEndpoint(from: customEndpointText) else {
+            return "custom:invalid"
+        }
+        return "custom:\(endpoint.origin)"
+    }
+
+    private static func validatedCustomEndpoint(from text: String) -> ValidatedEndpoint? {
+        let allowLocalHTTP = ProcessInfo.processInfo.environment["VIDLINGO_ALLOW_LOCAL_HTTP"] == "1"
+        return try? EndpointValidator.validate(text, allowLoopbackHTTP: allowLocalHTTP)
     }
 
     private func persistSelectedSettings() {

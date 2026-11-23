@@ -147,6 +147,16 @@ enum LLMHTTPClient {
         configuration.timeoutIntervalForResource = 300
         return URLSession(configuration: configuration)
     }()
+    private static let customSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 240
+        configuration.timeoutIntervalForResource = 300
+        return URLSession(
+            configuration: configuration,
+            delegate: CustomEndpointRedirectDelegate(),
+            delegateQueue: nil
+        )
+    }()
 
     static func sendChat<Body: Encodable>(
         request: URLRequest,
@@ -172,10 +182,11 @@ enum LLMHTTPClient {
     ) async throws -> Data {
         var request = baseRequest
         request.httpBody = try JSONEncoder().encode(body)
+        let activeSession = provider == .custom ? customSession : session
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await activeSession.data(for: request)
         } catch let error as URLError where error.code == .timedOut {
             throw LLMTranslationError.requestTimedOut(provider: provider.title)
         }
@@ -191,6 +202,28 @@ enum LLMHTTPClient {
             )
         }
         return data
+    }
+}
+
+final class CustomEndpointRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static func shouldFollow(from source: URL, to destination: URL) -> Bool {
+        EndpointValidator.sameOrigin(source, destination)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let source = task.originalRequest?.url,
+              let destination = request.url,
+              Self.shouldFollow(from: source, to: destination) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 
