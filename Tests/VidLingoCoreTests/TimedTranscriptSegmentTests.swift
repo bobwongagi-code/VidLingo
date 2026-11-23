@@ -41,6 +41,22 @@ final class TimedTranscriptSegmentTests: XCTestCase {
         XCTAssertFalse(segments[0].hasTranslation)
     }
 
+    func testSRTRoundTripPreservesLargeRepresentableHours() throws {
+        let start = (Int(Int32.max) + 1) * 3_600_000
+        let segments = [TimedTranscriptSegment(id: 1, startMilliseconds: start, endMilliseconds: start + 1_000, sourceText: "原文")]
+        XCTAssertEqual(try SRTTimelineCodec.decode(SRTTimelineCodec.encode(segments)), segments)
+    }
+
+    func testSRTDecodeRejectsOverflowingTimecode() {
+        let hours = Int.max / 3_600_000
+        for time in ["\(Int.max):00:00,000", "\(hours):59:59,999"] {
+            let srt = "1\n00:00:00,000 --> \(time)\n损坏的字幕"
+            XCTAssertThrowsError(try SRTTimelineCodec.decode(srt)) { error in
+                XCTAssertEqual(error as? SRTTimelineCodecError, .invalidTimeRange)
+            }
+        }
+    }
+
     func testTimedSegmentNormalizesNegativeStartTime() {
         let segment = TimedTranscriptSegment(
             id: 1,

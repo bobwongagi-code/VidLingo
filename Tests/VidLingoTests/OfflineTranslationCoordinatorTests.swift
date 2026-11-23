@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 import Foundation
 import VidLingoCore
@@ -70,6 +71,25 @@ final class OfflineTranslationCoordinatorTests: XCTestCase {
             videoDurationSeconds: normalPreflight.durationSeconds
         )
         XCTAssertEqual(unchangedSegments, sourceSegments)
+    }
+
+    func testPreflightChoosesEnabledAudioTrackAndRetainsItsStreamIndex() async throws {
+        let videoURL = try makeSyntheticVideo(.defaultSecondAudio)
+        let preflight = try await OfflineTranslationCoordinator.preflightVideo(
+            videoURL, token: ProcessCancellationToken(timeout: 30)
+        )
+        XCTAssertEqual(preflight.audioTrackIndex, 1)
+        XCTAssertEqual(preflight.audioStartOffsetSeconds ?? -1, 1.978, accuracy: 0.03)
+        let audioURL = try await OfflineVideoAudioExtractor.extractSpeechAudio(
+            from: videoURL, videoDuration: preflight.durationSeconds,
+            audioTrackIndex: try XCTUnwrap(preflight.audioTrackIndex),
+            token: ProcessCancellationToken(timeout: 30)
+        )
+        defer { OfflineVideoAudioExtractor.removeTemporaryAudio(audioURL) }
+        let duration = try await AVURLAsset(url: audioURL).load(.duration)
+        let seconds = CMTimeGetSeconds(duration)
+        XCTAssertGreaterThan(seconds, 2.9)
+        XCTAssertLessThan(seconds, 3.5)
     }
 
     func testNoAudioVideoUsesExistingNoSpeechFallbackAndPreviewConfirmsAbsence() async throws {
@@ -214,6 +234,14 @@ final class OfflineTranslationCoordinatorTests: XCTestCase {
                 "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=3",
                 "-map", "0:v:0", "-map", "1:a:0"
             ]
+        case .defaultSecondAudio:
+            arguments += [
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=5",
+                "-itsoffset", "2",
+                "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=3",
+                "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0",
+                "-disposition:a:0", "0", "-disposition:a:1", "default"
+            ]
         }
         arguments += ["-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-t", "\(durationSeconds)"]
         if kind != .noAudio {
@@ -238,5 +266,6 @@ final class OfflineTranslationCoordinatorTests: XCTestCase {
         case noAudio
         case normalAudio
         case delayedAudio
+        case defaultSecondAudio
     }
 }

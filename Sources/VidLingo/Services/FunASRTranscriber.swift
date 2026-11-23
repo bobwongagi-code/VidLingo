@@ -280,7 +280,7 @@ struct FunASRTranscriber {
     }
 
     private static func numericTokens(in text: String) -> [String] {
-        text.matches(of: /[+\-−]?\s*\p{Nd}+(?:[.,\/:\-٫٬]\s*\p{Nd}+)*[%٪‰]?/).map { match in
+        text.matches(of: /(?:[+\-−]\s*(?:\p{Sc}\s*)?|\p{Sc}\s*[+\-−]?\s*)?\p{Nd}+(?:[.,\/:\-٫٬]\s*\p{Nd}+)*(?:\s*[\p{Sc}%٪‰])?/).map { match in
             String(match.output.filter { !$0.isWhitespace }).replacingOccurrences(of: "−", with: "-")
         }
     }
@@ -296,7 +296,6 @@ struct FunASRTranscriber {
             || (0x31F0...0x31FF).contains(value)
             || (0x3400...0x4DBF).contains(value)
             || (0x4E00...0x9FFF).contains(value)
-            || (0xAC00...0xD7AF).contains(value)
             || (0xF900...0xFAFF).contains(value)
             || (0x20000...0x323AF).contains(value)
     }

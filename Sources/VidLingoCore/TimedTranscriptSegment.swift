@@ -108,7 +108,7 @@ public enum SRTTimelineCodec {
         let minutes = (totalMilliseconds % 3_600_000) / 60_000
         let seconds = (totalMilliseconds % 60_000) / 1_000
         let remainder = totalMilliseconds % 1_000
-        return String(format: "%02d:%02d:%02d,%03d", hours, minutes, seconds, remainder)
+        return String(format: "%02lld:%02d:%02d,%03d", Int64(hours), minutes, seconds, remainder)
     }
 
     private static func parseTimecode(_ text: String) -> Int? {
@@ -125,6 +125,8 @@ public enum SRTTimelineCodec {
               minutes >= 0, minutes < 60,
               seconds >= 0, seconds < 60,
               milliseconds >= 0, milliseconds < 1_000 else { return nil }
-        return hours * 3_600_000 + minutes * 60_000 + seconds * 1_000 + milliseconds
+        let timeWithinHour = minutes * 60_000 + seconds * 1_000 + milliseconds
+        guard hours <= (Int.max - timeWithinHour) / 3_600_000 else { return nil }
+        return hours * 3_600_000 + timeWithinHour
     }
 }
